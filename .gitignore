@@ -1,0 +1,9 @@
+# Build outputs
+piko
+src/*.o
+
+# Editor / OS files
+.vscode/
+.DS_Store
+*.swp
+*.swo
