@@ -4,7 +4,7 @@ TARGET  = piko
 SRC     = $(wildcard src/*.c)
 OBJ     = $(SRC:.c=.o)
 
-.PHONY: all clean test
+.PHONY: all clean test test-lexer
 
 all: $(TARGET)
 
@@ -22,3 +22,7 @@ test:
 		echo "--- $$f ---"; \
 		./$(TARGET) "$$f"; \
 	done
+	@$(MAKE) --no-print-directory test-lexer
+
+test-lexer:
+	@tests/run_lexer_tests.sh ./$(TARGET)
