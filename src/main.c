@@ -1,5 +1,6 @@
 #include "common.h"
 #include "lexer.h"
+#include "parser.h"
 
 static char *read_file_bytes(const char *path, size_t *out_size) {
     FILE *file = fopen(path, "rb");
@@ -79,6 +80,21 @@ static int run_lex_file(const char *path) {
     return 0;
 }
 
+static int run_parse_file(const char *path) {
+    char *source = read_file_bytes(path, NULL);
+    if (source == NULL) {
+        return 1;
+    }
+
+    bool had_error = false;
+    Node *program = parse_source(source, &had_error);
+    node_print(program, 0);
+    node_free(program);
+    free(source);
+
+    return had_error ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     if (argc == 1) {
         run_repl();
@@ -89,11 +105,16 @@ int main(int argc, char **argv) {
         return run_lex_file(argv[2]);
     }
 
+    if (argc == 3 && strcmp(argv[1], "--parse") == 0) {
+        return run_parse_file(argv[2]);
+    }
+
     if (argc == 2) {
         return run_file(argv[1]);
     }
 
     fprintf(stderr, "Usage: piko [script.piko]\n");
     fprintf(stderr, "       piko --lex <script.piko>\n");
+    fprintf(stderr, "       piko --parse <script.piko>\n");
     return 1;
 }

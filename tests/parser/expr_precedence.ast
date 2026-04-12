@@ -1,0 +1,20 @@
+PROGRAM count=4
+  EXPR_STMT
+    BINARY op=TOK_PLUS
+      INT_LIT value=1
+      BINARY op=TOK_STAR
+        INT_LIT value=2
+        INT_LIT value=3
+  EXPR_STMT
+    BINARY op=TOK_STAR
+      GROUPING
+        BINARY op=TOK_PLUS
+          INT_LIT value=1
+          INT_LIT value=2
+      INT_LIT value=3
+  EXPR_STMT
+    UNARY op=TOK_BANG
+      BOOL_LIT value=false
+  EXPR_STMT
+    UNARY op=TOK_MINUS
+      INT_LIT value=42
