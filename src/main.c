@@ -1,6 +1,7 @@
 #include "common.h"
 #include "lexer.h"
 #include "parser.h"
+#include "compiler.h"
 
 static char *read_file_bytes(const char *path, size_t *out_size) {
     FILE *file = fopen(path, "rb");
@@ -95,6 +96,32 @@ static int run_parse_file(const char *path) {
     return had_error ? 1 : 0;
 }
 
+static int run_compile_file(const char *path) {
+    char *source = read_file_bytes(path, NULL);
+    if (source == NULL) {
+        return 1;
+    }
+
+    bool had_parse_error = false;
+    Node *program = parse_source(source, &had_parse_error);
+    if (had_parse_error) {
+        node_free(program);
+        free(source);
+        return 1;
+    }
+
+    Chunk chunk;
+    bool ok = compile_program(program, &chunk);
+    if (ok) {
+        disassemble_chunk(&chunk, path);
+    }
+
+    chunk_free(&chunk);
+    node_free(program);
+    free(source);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     if (argc == 1) {
         run_repl();
@@ -109,6 +136,10 @@ int main(int argc, char **argv) {
         return run_parse_file(argv[2]);
     }
 
+    if (argc == 3 && strcmp(argv[1], "--compile") == 0) {
+        return run_compile_file(argv[2]);
+    }
+
     if (argc == 2) {
         return run_file(argv[1]);
     }
@@ -116,5 +147,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Usage: piko [script.piko]\n");
     fprintf(stderr, "       piko --lex <script.piko>\n");
     fprintf(stderr, "       piko --parse <script.piko>\n");
+    fprintf(stderr, "       piko --compile <script.piko>\n");
     return 1;
 }

@@ -1,0 +1,16 @@
+== tests/compile/decls_and_print.piko ==
+0000    1 OP_CONSTANT         0 '10'
+0002    1 OP_DEFINE_GLOBAL    1 'x'
+0004    2 OP_CONSTANT         2 '3.14'
+0006    2 OP_DEFINE_GLOBAL    3 'y'
+0008    3 OP_GET_GLOBAL       4 'x'
+0010    3 OP_GET_GLOBAL       5 'y'
+0012    3 OP_ADD          
+0013    3 OP_PRINT        
+0014    4 OP_CONSTANT         6 'sum={x+y}'
+0016    4 OP_PRINT        
+0017    5 OP_GET_GLOBAL       7 'x'
+0019    5 OP_GET_GLOBAL       8 'y'
+0021    5 OP_ADD          
+0022    5 OP_POP          
+0023    1 OP_RETURN       
