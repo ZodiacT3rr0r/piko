@@ -1,0 +1,6 @@
+== tests/compile/calls.piko ==
+0000    1 OP_GET_GLOBAL       0 'len'
+0002    1 OP_CONSTANT         1 'hello'
+0004    1 OP_CALL             1
+0006    1 OP_POP          
+0007    1 OP_RETURN       

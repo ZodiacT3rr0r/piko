@@ -3,6 +3,7 @@
 #include "parser.h"
 #include "compiler.h"
 #include "vm.h"
+#include "builtins.h"
 
 static char *read_file_bytes(const char *path, size_t *out_size) {
     FILE *file = fopen(path, "rb");
@@ -85,6 +86,7 @@ static int run_file(const char *path) {
 
     VM vm;
     vm_init(&vm);
+    builtins_install(&vm);
     InterpretResult result = vm_interpret(&vm, &chunk);
     vm_free(&vm);
 

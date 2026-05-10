@@ -103,6 +103,9 @@ int disassemble_instruction(const Chunk *chunk, int offset) {
 			return simple_instruction("OP_NOT", offset);
 		case OP_NEGATE:
 			return simple_instruction("OP_NEGATE", offset);
+		case OP_CALL:
+			printf("%-16s %4d\n", "OP_CALL", chunk->code[offset + 1]);
+			return offset + 2;
 		case OP_PRINT:
 			return simple_instruction("OP_PRINT", offset);
 		case OP_RETURN:

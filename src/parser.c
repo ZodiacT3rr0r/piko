@@ -19,6 +19,7 @@ static Node *parse_comparison(Parser *p);
 static Node *parse_term(Parser *p);
 static Node *parse_factor(Parser *p);
 static Node *parse_unary(Parser *p);
+static Node *parse_call(Parser *p);
 static Node *parse_primary(Parser *p);
 
 static void parser_error_at(Parser *p, Token token, const char *message) {
@@ -147,6 +148,14 @@ static Node *new_unary(TokenType op, Node *right, int line) {
 	return n;
 }
 
+static Node *new_call(Node *callee, Node **args, int arg_count, int line) {
+	Node *n = node_new(NODE_CALL, line);
+	n->as.call.callee = callee;
+	n->as.call.args = args;
+	n->as.call.arg_count = arg_count;
+	return n;
+}
+
 static Node *new_binary(Node *left, TokenType op, Node *right, int line) {
 	Node *n = node_new(NODE_BINARY, line);
 	n->as.binary.left = left;
@@ -200,7 +209,45 @@ static Node *parse_unary(Parser *p) {
 		Node *right = parse_unary(p);
 		return new_unary(op.type, right, op.line);
 	}
-	return parse_primary(p);
+	return parse_call(p);
+}
+
+static Node *parse_call(Parser *p) {
+	Node *expr = parse_primary(p);
+
+	for (;;) {
+		if (!parser_match(p, TOK_LPAREN)) {
+			break;
+		}
+
+		int line = p->previous.line;
+
+		int arg_count = 0;
+		Node **args = NULL;
+		if (!parser_check(p, TOK_RPAREN)) {
+			int capacity = 0;
+			for (;;) {
+				if (arg_count + 1 > capacity) {
+					capacity = capacity < 4 ? 4 : capacity * 2;
+					args = (Node **)realloc(args, sizeof(Node *) * (size_t)capacity);
+					if (args == NULL) {
+						fprintf(stderr, "piko: out of memory\n");
+						exit(1);
+					}
+				}
+
+				args[arg_count++] = parse_expression(p);
+				if (!parser_match(p, TOK_COMMA)) {
+					break;
+				}
+			}
+		}
+
+		parser_consume(p, TOK_RPAREN, "Expect ')' after arguments.");
+		expr = new_call(expr, args, arg_count, line);
+	}
+
+	return expr;
 }
 
 static Node *parse_factor(Parser *p) {

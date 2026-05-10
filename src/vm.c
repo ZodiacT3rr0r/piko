@@ -52,6 +52,13 @@ void vm_free(VM *vm) {
 	vm_init(vm);
 }
 
+void vm_define_native(VM *vm, const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result)) {
+	ObjString *copy = obj_string_copy(name, (int)strlen(name));
+	ObjNative *native = obj_native_new(name, arity, function);
+	define_global(vm, copy, OBJ_VAL(native));
+	obj_free((Obj *)copy);
+}
+
 static void push(VM *vm, Value value) {
 	*vm->stack_top = value;
 	vm->stack_top++;
@@ -202,7 +209,23 @@ static bool binary_number_op(VM *vm, char op) {
 			break;
 	}
 
-		return true;
+	return true;
+}
+
+static bool call_native(VM *vm, ObjNative *native, int arg_count) {
+	if (arg_count != native->arity) {
+		runtime_error(vm, "%s expects %d arguments.", native->name, native->arity);
+		return false;
+	}
+
+	Value result = NIL_VAL;
+	if (!native->function(arg_count, vm->stack_top - arg_count, &result)) {
+		return false;
+	}
+
+	vm->stack_top -= arg_count + 1;
+	push(vm, result);
+	return true;
 }
 
 InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
@@ -309,6 +332,18 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 			case OP_NOT:
 				push(vm, BOOL_VAL(is_falsey(pop(vm))));
 				break;
+			case OP_CALL: {
+				int arg_count = (int)read_byte(vm);
+				Value callee = peek(vm, arg_count);
+				if (!IS_OBJ(callee) || OBJ_TYPE(AS_OBJ(callee)) != OBJ_NATIVE) {
+					runtime_error(vm, "Can only call native functions in this build.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				if (!call_native(vm, (ObjNative *)AS_OBJ(callee), arg_count)) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				break;
+			}
 			case OP_NEGATE:
 				if (!IS_NUMBER(peek(vm, 0))) {
 					runtime_error(vm, "Operand must be a number.");

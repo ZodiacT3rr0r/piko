@@ -1,0 +1,7 @@
+PROGRAM count=1
+  EXPR_STMT
+    CALL
+      callee:
+        IDENT name=len
+      args=1
+        STRING_LIT value="hello"

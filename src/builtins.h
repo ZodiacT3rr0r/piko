@@ -1,6 +1,8 @@
 #ifndef PIKO_BUILTINS_H
 #define PIKO_BUILTINS_H
 
-/* Day 1 placeholder for builtins. */
+#include "vm.h"
+
+void builtins_install(VM *vm);
 
 #endif

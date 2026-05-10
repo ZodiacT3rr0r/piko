@@ -9,6 +9,7 @@ typedef struct {
 
 static void compile_expression(Compiler *c, Node *node);
 static void compile_statement(Compiler *c, Node *node);
+static void compile_call(Compiler *c, Node *node);
 
 static void compile_error(Compiler *c, int line, const char *message) {
 	fprintf(stderr, "[line %d] Compile error: %s\n", line, message);
@@ -108,6 +109,14 @@ static void compile_unary(Compiler *c, Node *node) {
 	}
 }
 
+static void compile_call(Compiler *c, Node *node) {
+	compile_expression(c, node->as.call.callee);
+	for (int i = 0; i < node->as.call.arg_count; i++) {
+		compile_expression(c, node->as.call.args[i]);
+	}
+	emit_bytes(c, OP_CALL, (uint8_t)node->as.call.arg_count, node->line);
+}
+
 static void compile_expression(Compiler *c, Node *node) {
 	if (node == NULL) {
 		compile_error(c, 0, "Missing expression node.");
@@ -143,6 +152,9 @@ static void compile_expression(Compiler *c, Node *node) {
 			break;
 		case NODE_UNARY:
 			compile_unary(c, node);
+			break;
+		case NODE_CALL:
+			compile_call(c, node);
 			break;
 		case NODE_BINARY:
 			compile_binary(c, node);

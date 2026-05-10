@@ -79,6 +79,13 @@ void node_free(Node *node) {
 		case NODE_UNARY:
 			node_free(node->as.unary.right);
 			break;
+		case NODE_CALL:
+			node_free(node->as.call.callee);
+			for (int i = 0; i < node->as.call.arg_count; i++) {
+				node_free(node->as.call.args[i]);
+			}
+			free(node->as.call.args);
+			break;
 		case NODE_BINARY:
 			node_free(node->as.binary.left);
 			node_free(node->as.binary.right);
@@ -109,6 +116,7 @@ const char *node_type_name(NodeType type) {
 		case NODE_STRING_LIT: return "STRING_LIT";
 		case NODE_IDENT: return "IDENT";
 		case NODE_UNARY: return "UNARY";
+		case NODE_CALL: return "CALL";
 		case NODE_BINARY: return "BINARY";
 		case NODE_GROUPING: return "GROUPING";
 	}
@@ -169,6 +177,17 @@ void node_print(Node *node, int indent) {
 		case NODE_UNARY:
 			printf(" op=%s\n", token_op_name(node->as.unary.op));
 			node_print(node->as.unary.right, indent + 2);
+			break;
+		case NODE_CALL:
+			printf("\n");
+			print_indent(indent + 2);
+			printf("callee:\n");
+			node_print(node->as.call.callee, indent + 4);
+			print_indent(indent + 2);
+			printf("args=%d\n", node->as.call.arg_count);
+			for (int i = 0; i < node->as.call.arg_count; i++) {
+				node_print(node->as.call.args[i], indent + 4);
+			}
 			break;
 		case NODE_BINARY:
 			printf(" op=%s\n", token_op_name(node->as.binary.op));

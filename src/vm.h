@@ -27,5 +27,6 @@ typedef struct {
 void vm_init(VM *vm);
 void vm_free(VM *vm);
 InterpretResult vm_interpret(VM *vm, const Chunk *chunk);
+void vm_define_native(VM *vm, const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result));
 
 #endif
