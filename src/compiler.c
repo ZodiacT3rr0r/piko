@@ -117,6 +117,64 @@ static void compile_call(Compiler *c, Node *node) {
 	emit_bytes(c, OP_CALL, (uint8_t)node->as.call.arg_count, node->line);
 }
 
+static void compile_array(Compiler *c, Node *node) {
+	/* create constants for each element and build an ObjArray constant */
+	int count = node->as.array.count;
+	Value *vals = NULL;
+	if (count > 0) {
+		vals = (Value *)malloc(sizeof(Value) * (size_t)count);
+		if (vals == NULL) {
+			compile_error(c, node->line, "Out of memory building array literal.");
+			return;
+		}
+	}
+
+	for (int i = 0; i < count; i++) {
+		Node *elem = node->as.array.items[i];
+		/* after compiling expression it would push value at runtime; instead for constant array
+		   we create constants for each element by adding them to chunk->constants directly */
+		/* Evaluate element as constant: if element is literal or string/ident handled earlier
+		   we can create constants by compiling the literal to a Value here. Simpler: compile
+		   element to a constant by invoking make_constant on its Value representation if possible.
+		   For now, restrict array literals to literal constants only: numbers, strings, bool, nil. */
+		switch (elem->type) {
+			case NODE_INT_LIT:
+				vals[i] = NUMBER_VAL((double)elem->as.int_val);
+				break;
+			case NODE_FLOAT_LIT:
+				vals[i] = NUMBER_VAL(elem->as.float_val);
+				break;
+			case NODE_STRING_LIT: {
+				ObjString *s = obj_string_copy(elem->as.string_val.chars, elem->as.string_val.length);
+				vals[i] = OBJ_VAL(s);
+				break;
+			}
+			case NODE_BOOL_LIT:
+				vals[i] = BOOL_VAL(elem->as.bool_val);
+				break;
+			case NODE_NIL_LIT:
+				vals[i] = NIL_VAL;
+				break;
+			default:
+				compile_error(c, elem->line, "Array element must be a literal in this stage.");
+				free(vals);
+				return;
+		}
+	}
+
+	/* Create ObjArray object */
+	ObjArray *arr = obj_array_new(vals, count);
+	free(vals);
+
+	emit_constant(c, OBJ_VAL(arr), node->line);
+}
+
+static void compile_index(Compiler *c, Node *node) {
+	compile_expression(c, node->as.index.left);
+	compile_expression(c, node->as.index.index);
+	emit_byte(c, OP_GET_INDEX, node->line);
+}
+
 static void compile_expression(Compiler *c, Node *node) {
 	if (node == NULL) {
 		compile_error(c, 0, "Missing expression node.");
@@ -153,8 +211,14 @@ static void compile_expression(Compiler *c, Node *node) {
 		case NODE_UNARY:
 			compile_unary(c, node);
 			break;
+		case NODE_ARRAY:
+			compile_array(c, node);
+			break;
 		case NODE_CALL:
 			compile_call(c, node);
+			break;
+		case NODE_INDEX:
+			compile_index(c, node);
 			break;
 		case NODE_BINARY:
 			compile_binary(c, node);

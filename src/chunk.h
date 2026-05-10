@@ -24,6 +24,7 @@ typedef enum {
 	OP_NOT,
 	OP_NEGATE,
 	OP_CALL,
+	OP_GET_INDEX,
 	OP_PRINT,
 	OP_RETURN,
 } OpCode;

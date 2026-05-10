@@ -18,7 +18,9 @@ typedef enum {
 	NODE_IDENT,
 	NODE_UNARY,
 	NODE_CALL,
+	NODE_ARRAY,
 	NODE_BINARY,
+	NODE_INDEX,
 	NODE_GROUPING,
 } NodeType;
 
@@ -71,6 +73,16 @@ struct Node {
 			Node **args;
 			int arg_count;
 		} call;
+
+		struct {
+			Node **items;
+			int count;
+		} array;
+
+		struct {
+			Node *left;
+			Node *index;
+		} index;
 
 		struct {
 			TokenType op;

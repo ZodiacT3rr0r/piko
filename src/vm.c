@@ -344,6 +344,26 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				}
 				break;
 			}
+			case OP_GET_INDEX: {
+				Value index = pop(vm);
+				Value array = pop(vm);
+				if (!IS_OBJ(array) || OBJ_TYPE(AS_OBJ(array)) != OBJ_ARRAY) {
+					runtime_error(vm, "Indexing supported only on arrays.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				if (!IS_NUMBER(index)) {
+					runtime_error(vm, "Index must be a number.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				ObjArray *a = (ObjArray *)AS_OBJ(array);
+				int idx = (int)AS_NUMBER(index);
+				if (idx < 0 || idx >= a->count) {
+					runtime_error(vm, "Index out of bounds.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				push(vm, a->items[idx]);
+				break;
+			}
 			case OP_NEGATE:
 				if (!IS_NUMBER(peek(vm, 0))) {
 					runtime_error(vm, "Operand must be a number.");

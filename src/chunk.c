@@ -106,6 +106,8 @@ int disassemble_instruction(const Chunk *chunk, int offset) {
 		case OP_CALL:
 			printf("%-16s %4d\n", "OP_CALL", chunk->code[offset + 1]);
 			return offset + 2;
+		case OP_GET_INDEX:
+			return simple_instruction("OP_GET_INDEX", offset);
 		case OP_PRINT:
 			return simple_instruction("OP_PRINT", offset);
 		case OP_RETURN:

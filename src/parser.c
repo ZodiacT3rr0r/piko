@@ -181,6 +181,34 @@ static Node *parse_primary(Parser *p) {
 	if (parser_match(p, TOK_INT)) {
 		return new_literal_int(p->previous);
 	}
+	if (parser_match(p, TOK_LBRACKET)) {
+		int count = 0;
+		Node **items = NULL;
+		if (!parser_check(p, TOK_RBRACKET)) {
+			int capacity = 0;
+			for (;;) {
+				if (count + 1 > capacity) {
+					capacity = capacity < 4 ? 4 : capacity * 2;
+					items = (Node **)realloc(items, sizeof(Node *) * (size_t)capacity);
+					if (items == NULL) {
+						fprintf(stderr, "piko: out of memory\n");
+						exit(1);
+					}
+				}
+
+				items[count++] = parse_expression(p);
+				if (!parser_match(p, TOK_COMMA)) {
+					break;
+				}
+			}
+		}
+
+		parser_consume(p, TOK_RBRACKET, "Expect ']' after array literal.");
+		Node *n = node_new(NODE_ARRAY, p->previous.line);
+		n->as.array.items = items;
+		n->as.array.count = count;
+		return n;
+	}
 	if (parser_match(p, TOK_FLOAT)) {
 		return new_literal_float(p->previous);
 	}
@@ -216,6 +244,7 @@ static Node *parse_call(Parser *p) {
 	Node *expr = parse_primary(p);
 
 	for (;;) {
+		/* handle function call */
 		if (!parser_match(p, TOK_LPAREN)) {
 			break;
 		}
@@ -245,6 +274,22 @@ static Node *parse_call(Parser *p) {
 
 		parser_consume(p, TOK_RPAREN, "Expect ')' after arguments.");
 		expr = new_call(expr, args, arg_count, line);
+	}
+
+	/* indexing: postfix [index] */
+	for (;;) {
+		if (!parser_match(p, TOK_LBRACKET)) {
+			break;
+		}
+
+		int idx_line = p->previous.line;
+		Node *index = parse_expression(p);
+		parser_consume(p, TOK_RBRACKET, "Expect ']' after index.");
+
+		Node *n = node_new(NODE_INDEX, idx_line);
+		n->as.index.left = expr;
+		n->as.index.index = index;
+		expr = n;
 	}
 
 	return expr;

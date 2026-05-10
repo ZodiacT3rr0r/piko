@@ -1,0 +1,8 @@
+== tests/compile/arrays.piko ==
+0000    1 OP_CONSTANT         0 '[1, 2, 3]'
+0002    1 OP_DEFINE_GLOBAL    1 'a'
+0004    2 OP_GET_GLOBAL       2 'a'
+0006    2 OP_CONSTANT         3 '1'
+0008    2 OP_GET_INDEX    
+0009    2 OP_PRINT        
+0010    1 OP_RETURN       

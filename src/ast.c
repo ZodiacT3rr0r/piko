@@ -86,6 +86,16 @@ void node_free(Node *node) {
 			}
 			free(node->as.call.args);
 			break;
+		case NODE_ARRAY:
+			for (int i = 0; i < node->as.array.count; i++) {
+				node_free(node->as.array.items[i]);
+			}
+			free(node->as.array.items);
+			break;
+		case NODE_INDEX:
+			node_free(node->as.index.left);
+			node_free(node->as.index.index);
+			break;
 		case NODE_BINARY:
 			node_free(node->as.binary.left);
 			node_free(node->as.binary.right);
@@ -117,7 +127,9 @@ const char *node_type_name(NodeType type) {
 		case NODE_IDENT: return "IDENT";
 		case NODE_UNARY: return "UNARY";
 		case NODE_CALL: return "CALL";
+		case NODE_ARRAY: return "ARRAY";
 		case NODE_BINARY: return "BINARY";
+		case NODE_INDEX: return "INDEX";
 		case NODE_GROUPING: return "GROUPING";
 	}
 	return "UNKNOWN";
@@ -188,6 +200,23 @@ void node_print(Node *node, int indent) {
 			for (int i = 0; i < node->as.call.arg_count; i++) {
 				node_print(node->as.call.args[i], indent + 4);
 			}
+			break;
+		case NODE_ARRAY:
+			printf("\n");
+			print_indent(indent + 2);
+			printf("items=%d\n", node->as.array.count);
+			for (int i = 0; i < node->as.array.count; i++) {
+				node_print(node->as.array.items[i], indent + 4);
+			}
+			break;
+		case NODE_INDEX:
+			printf("\n");
+			print_indent(indent + 2);
+			printf("left:\n");
+			node_print(node->as.index.left, indent + 4);
+			print_indent(indent + 2);
+			printf("index:\n");
+			node_print(node->as.index.index, indent + 4);
 			break;
 		case NODE_BINARY:
 			printf(" op=%s\n", token_op_name(node->as.binary.op));

@@ -35,6 +35,32 @@ ObjNative *obj_native_new(const char *name, int arity, bool (*function)(int arg_
 	return native;
 }
 
+ObjArray *obj_array_new(Value *items, int count) {
+	ObjArray *arr = (ObjArray *)malloc(sizeof(ObjArray));
+	if (arr == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	arr->obj.type = OBJ_ARRAY;
+	arr->count = count;
+	if (count > 0) {
+		arr->items = (Value *)malloc(sizeof(Value) * (size_t)count);
+		if (arr->items == NULL) {
+			free(arr);
+			fprintf(stderr, "piko: out of memory\n");
+			exit(1);
+		}
+		for (int i = 0; i < count; i++) {
+			arr->items[i] = items[i];
+		}
+	} else {
+		arr->items = NULL;
+	}
+
+	return arr;
+}
+
 void obj_print(Obj *obj) {
 	switch (obj->type) {
 		case OBJ_STRING: {
@@ -47,6 +73,16 @@ void obj_print(Obj *obj) {
 			printf("<native fn %s>", native->name);
 			break;
 		}
+			case OBJ_ARRAY: {
+				ObjArray *a = (ObjArray *)obj;
+				printf("[");
+				for (int i = 0; i < a->count; i++) {
+					print_value(a->items[i]);
+					if (i + 1 < a->count) printf(", ");
+				}
+				printf("]");
+				break;
+			}
 	}
 }
 
@@ -62,5 +98,18 @@ void obj_free(Obj *obj) {
 			free(obj);
 			break;
 		}
+			case OBJ_ARRAY: {
+				ObjArray *a = (ObjArray *)obj;
+				if (a->items != NULL) {
+					for (int i = 0; i < a->count; i++) {
+						if (IS_OBJ(a->items[i])) {
+							obj_free(AS_OBJ(a->items[i]));
+						}
+					}
+					free(a->items);
+				}
+				free(a);
+				break;
+			}
 	}
 }

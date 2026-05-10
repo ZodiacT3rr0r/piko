@@ -1,0 +1,13 @@
+PROGRAM count=2
+  LET name=a
+    ARRAY
+      items=3
+        INT_LIT value=1
+        INT_LIT value=2
+        INT_LIT value=3
+  PRINT_STMT
+    INDEX
+      left:
+        IDENT name=a
+      index:
+        INT_LIT value=1
