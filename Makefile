@@ -4,7 +4,7 @@ TARGET  = piko
 SRC     = $(wildcard src/*.c)
 OBJ     = $(SRC:.c=.o)
 
-.PHONY: all clean test test-lexer test-parser test-compile
+.PHONY: all clean test test-lexer test-parser test-compile test-runtime
 
 all: $(TARGET)
 
@@ -25,6 +25,7 @@ test:
 	@$(MAKE) --no-print-directory test-lexer
 	@$(MAKE) --no-print-directory test-parser
 	@$(MAKE) --no-print-directory test-compile
+	@$(MAKE) --no-print-directory test-runtime
 
 test-lexer:
 	@tests/run_lexer_tests.sh ./$(TARGET)
@@ -34,3 +35,6 @@ test-parser:
 
 test-compile:
 	@tests/run_compile_tests.sh ./$(TARGET)
+
+test-runtime:
+	@tests/run_runtime_tests.sh ./$(TARGET)

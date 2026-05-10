@@ -2,6 +2,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "compiler.h"
+#include "vm.h"
 
 static char *read_file_bytes(const char *path, size_t *out_size) {
     FILE *file = fopen(path, "rb");
@@ -65,9 +66,33 @@ static int run_file(const char *path) {
         return 1;
     }
 
-    printf("[stub] loaded %s (%zu bytes)\n", path, read);
+    bool had_parse_error = false;
+    Node *program = parse_source(buffer, &had_parse_error);
+    if (had_parse_error) {
+        node_free(program);
+        free(buffer);
+        return 1;
+    }
+
+    Chunk chunk;
+    bool compile_ok = compile_program(program, &chunk);
+    if (!compile_ok) {
+        chunk_free(&chunk);
+        node_free(program);
+        free(buffer);
+        return 1;
+    }
+
+    VM vm;
+    vm_init(&vm);
+    InterpretResult result = vm_interpret(&vm, &chunk);
+    vm_free(&vm);
+
+    chunk_free(&chunk);
+    node_free(program);
+    (void)read;
     free(buffer);
-    return 0;
+    return result == VM_INTERPRET_OK ? 0 : 1;
 }
 
 static int run_lex_file(const char *path) {
