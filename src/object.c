@@ -21,6 +21,26 @@ ObjString *obj_string_copy(const char *chars, int length) {
 	return string;
 }
 
+ObjFunction *obj_function_new(const char *name, int arity) {
+	ObjFunction *function = (ObjFunction *)malloc(sizeof(ObjFunction));
+	if (function == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	function->obj.type = OBJ_FUNCTION;
+	function->name = (char *)malloc(strlen(name) + 1);
+	if (function->name == NULL) {
+		free(function);
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+	strcpy(function->name, name);
+	function->arity = arity;
+	chunk_init(&function->chunk);
+	return function;
+}
+
 ObjNative *obj_native_new(const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result)) {
 	ObjNative *native = (ObjNative *)malloc(sizeof(ObjNative));
 	if (native == NULL) {
@@ -68,6 +88,11 @@ void obj_print(Obj *obj) {
 			printf("%s", string->chars);
 			break;
 		}
+		case OBJ_FUNCTION: {
+			ObjFunction *function = (ObjFunction *)obj;
+			printf("<fn %s>", function->name);
+			break;
+		}
 		case OBJ_NATIVE: {
 			ObjNative *native = (ObjNative *)obj;
 			printf("<native fn %s>", native->name);
@@ -92,6 +117,13 @@ void obj_free(Obj *obj) {
 			ObjString *string = (ObjString *)obj;
 			free(string->chars);
 			free(string);
+			break;
+		}
+		case OBJ_FUNCTION: {
+			ObjFunction *function = (ObjFunction *)obj;
+			free(function->name);
+			chunk_free(&function->chunk);
+			free(function);
 			break;
 		}
 		case OBJ_NATIVE: {

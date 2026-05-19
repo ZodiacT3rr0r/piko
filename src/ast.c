@@ -67,6 +67,17 @@ void node_free(Node *node) {
 			free(node->as.let_stmt.name);
 			node_free(node->as.let_stmt.init);
 			break;
+		case NODE_FN_DECL:
+			free(node->as.fn_decl.name);
+			for (int i = 0; i < node->as.fn_decl.param_count; i++) {
+				free(node->as.fn_decl.params[i]);
+			}
+			free(node->as.fn_decl.params);
+			node_free(node->as.fn_decl.body);
+			break;
+		case NODE_RETURN:
+			node_free(node->as.return_stmt.value);
+			break;
 		case NODE_PRINT_STMT:
 			node_free(node->as.print_stmt.expr);
 			break;
@@ -119,6 +130,8 @@ const char *node_type_name(NodeType type) {
 		case NODE_EXPR_STMT: return "EXPR_STMT";
 		case NODE_LET: return "LET";
 		case NODE_PRINT_STMT: return "PRINT_STMT";
+		case NODE_FN_DECL: return "FN_DECL";
+		case NODE_RETURN: return "RETURN";
 		case NODE_INT_LIT: return "INT_LIT";
 		case NODE_FLOAT_LIT: return "FLOAT_LIT";
 		case NODE_BOOL_LIT: return "BOOL_LIT";
@@ -167,6 +180,22 @@ void node_print(Node *node, int indent) {
 		case NODE_PRINT_STMT:
 			printf("\n");
 			node_print(node->as.print_stmt.expr, indent + 2);
+			break;
+		case NODE_FN_DECL:
+			printf(" name=%s params=%d\n", node->as.fn_decl.name, node->as.fn_decl.param_count);
+			for (int i = 0; i < node->as.fn_decl.param_count; i++) {
+				print_indent(indent + 2);
+				printf("param=%s\n", node->as.fn_decl.params[i]);
+			}
+			print_indent(indent + 2);
+			printf("body:\n");
+			node_print(node->as.fn_decl.body, indent + 4);
+			break;
+		case NODE_RETURN:
+			printf("\n");
+			if (node->as.return_stmt.value != NULL) {
+				node_print(node->as.return_stmt.value, indent + 2);
+			}
 			break;
 		case NODE_INT_LIT:
 			printf(" value=%lld\n", (long long)node->as.int_val);

@@ -1,0 +1,9 @@
+== tests/compile/functions.piko ==
+0000    1 OP_CONSTANT         0 '<fn add>'
+0002    1 OP_DEFINE_GLOBAL    1 'add'
+0004    5 OP_GET_GLOBAL       2 'add'
+0006    5 OP_CONSTANT         3 '10'
+0008    5 OP_CONSTANT         4 '4'
+0010    5 OP_CALL             2
+0012    5 OP_PRINT        
+0013    1 OP_RETURN       

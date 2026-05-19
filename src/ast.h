@@ -9,6 +9,8 @@ typedef enum {
 	NODE_EXPR_STMT,
 	NODE_LET,
 	NODE_PRINT_STMT,
+	NODE_FN_DECL,
+	NODE_RETURN,
 
 	NODE_INT_LIT,
 	NODE_FLOAT_LIT,
@@ -44,6 +46,17 @@ struct Node {
 			char *name;
 			Node *init;
 		} let_stmt;
+
+		struct {
+			char *name;
+			char **params;
+			int param_count;
+			Node *body;
+		} fn_decl;
+
+		struct {
+			Node *value;
+		} return_stmt;
 
 		struct {
 			Node *expr;

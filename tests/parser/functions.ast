@@ -1,0 +1,19 @@
+PROGRAM count=2
+  FN_DECL name=add params=2
+    param=a
+    param=b
+    body:
+      PROGRAM count=2
+        LET name=sum
+          BINARY op=TOK_PLUS
+            IDENT name=a
+            IDENT name=b
+        RETURN
+          IDENT name=sum
+  PRINT_STMT
+    CALL
+      callee:
+        IDENT name=add
+      args=2
+        INT_LIT value=3
+        INT_LIT value=4

@@ -1,0 +1,6 @@
+fn add(a, b) {
+    let sum = a + b;
+    return sum;
+}
+
+print(add(3, 4));

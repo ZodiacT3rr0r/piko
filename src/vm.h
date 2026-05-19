@@ -11,6 +11,12 @@ typedef enum {
 typedef struct {
 	const Chunk *chunk;
 	const uint8_t *ip;
+	Value *slots;
+} CallFrame;
+
+typedef struct {
+	CallFrame frames[64];
+	int frame_count;
 
 	Value stack[256];
 	Value *stack_top;

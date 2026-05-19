@@ -5,11 +5,20 @@
 typedef struct {
 	Chunk *chunk;
 	bool had_error;
+	bool in_function;
+	struct {
+		const char *name;
+		int length;
+	} *locals;
+	int local_count;
+	int local_capacity;
 } Compiler;
 
 static void compile_expression(Compiler *c, Node *node);
 static void compile_statement(Compiler *c, Node *node);
 static void compile_call(Compiler *c, Node *node);
+static void compile_function_decl(Compiler *c, Node *node);
+static void compile_return(Compiler *c, Node *node);
 
 static void compile_error(Compiler *c, int line, const char *message) {
 	fprintf(stderr, "[line %d] Compile error: %s\n", line, message);
@@ -32,6 +41,59 @@ static int make_constant(Compiler *c, Value value, int line) {
 		return 0;
 	}
 	return constant;
+}
+
+static void compiler_init(Compiler *c, Chunk *chunk, bool in_function) {
+	c->chunk = chunk;
+	c->had_error = false;
+	c->in_function = in_function;
+	c->locals = NULL;
+	c->local_capacity = 0;
+	c->local_count = in_function ? 1 : 0;
+}
+
+static void compiler_free(Compiler *c) {
+	free(c->locals);
+	c->locals = NULL;
+	c->local_capacity = 0;
+	c->local_count = 0;
+}
+
+static void ensure_local_capacity(Compiler *c) {
+	if (c->local_count + 1 <= c->local_capacity) {
+		return;
+	}
+
+	int new_capacity = c->local_capacity < 8 ? 8 : c->local_capacity * 2;
+	void *memory = realloc(c->locals, sizeof(*c->locals) * (size_t)new_capacity);
+	if (memory == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	c->locals = memory;
+	c->local_capacity = new_capacity;
+}
+
+static void declare_local(Compiler *c, const char *name, int length) {
+	ensure_local_capacity(c);
+	c->locals[c->local_count].name = name;
+	c->locals[c->local_count].length = length;
+	c->local_count++;
+}
+
+static int resolve_local(Compiler *c, const char *name, int length) {
+	int start = c->in_function ? 1 : 0;
+	for (int i = c->local_count - 1; i >= start; i--) {
+		if (c->locals[i].length == length && memcmp(c->locals[i].name, name, (size_t)length) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+static void emit_local(Compiler *c, OpCode op, int slot, int line) {
+	emit_bytes(c, (uint8_t)op, (uint8_t)slot, line);
 }
 
 static void emit_constant(Compiler *c, Value value, int line) {
@@ -117,6 +179,59 @@ static void compile_call(Compiler *c, Node *node) {
 	emit_bytes(c, OP_CALL, (uint8_t)node->as.call.arg_count, node->line);
 }
 
+static void compile_function_body(Compiler *c, Node *body) {
+	for (int i = 0; i < body->as.program.count; i++) {
+		compile_statement(c, body->as.program.items[i]);
+		if (c->had_error) {
+			return;
+		}
+	}
+
+	emit_byte(c, OP_NIL, body->line);
+	emit_byte(c, OP_RETURN, body->line);
+}
+
+static void compile_function_decl(Compiler *c, Node *node) {
+	if (c->in_function) {
+		compile_error(c, node->line, "Nested function declarations are not supported yet.");
+		return;
+	}
+
+	ObjFunction *function = obj_function_new(node->as.fn_decl.name, node->as.fn_decl.param_count);
+	Compiler inner;
+	compiler_init(&inner, &function->chunk, true);
+
+	for (int i = 0; i < node->as.fn_decl.param_count; i++) {
+		declare_local(&inner, node->as.fn_decl.params[i], (int)strlen(node->as.fn_decl.params[i]));
+	}
+
+	compile_function_body(&inner, node->as.fn_decl.body);
+	if (inner.had_error) {
+		obj_free((Obj *)function);
+		compiler_free(&inner);
+		c->had_error = true;
+		return;
+	}
+
+	compiler_free(&inner);
+	emit_constant(c, OBJ_VAL(function), node->line);
+	emit_global(c, OP_DEFINE_GLOBAL, node->as.fn_decl.name, node->line);
+}
+
+static void compile_return(Compiler *c, Node *node) {
+	if (!c->in_function) {
+		compile_error(c, node->line, "return is only valid inside a function.");
+		return;
+	}
+
+	if (node->as.return_stmt.value == NULL) {
+		emit_byte(c, OP_NIL, node->line);
+	} else {
+		compile_expression(c, node->as.return_stmt.value);
+	}
+	emit_byte(c, OP_RETURN, node->line);
+}
+
 static void compile_array(Compiler *c, Node *node) {
 	/* create constants for each element and build an ObjArray constant */
 	int count = node->as.array.count;
@@ -200,9 +315,14 @@ static void compile_expression(Compiler *c, Node *node) {
 			break;
 		}
 		case NODE_IDENT: {
-			ObjString *name = obj_string_copy(node->as.ident.name, node->as.ident.length);
-			int constant = make_constant(c, OBJ_VAL(name), node->line);
-			emit_bytes(c, OP_GET_GLOBAL, (uint8_t)constant, node->line);
+			int local = resolve_local(c, node->as.ident.name, node->as.ident.length);
+			if (local >= 0) {
+				emit_local(c, OP_GET_LOCAL, local, node->line);
+			} else {
+				ObjString *name = obj_string_copy(node->as.ident.name, node->as.ident.length);
+				int constant = make_constant(c, OBJ_VAL(name), node->line);
+				emit_bytes(c, OP_GET_GLOBAL, (uint8_t)constant, node->line);
+			}
 			break;
 		}
 		case NODE_GROUPING:
@@ -246,7 +366,17 @@ static void compile_statement(Compiler *c, Node *node) {
 			break;
 		case NODE_LET:
 			compile_expression(c, node->as.let_stmt.init);
-			emit_global(c, OP_DEFINE_GLOBAL, node->as.let_stmt.name, node->line);
+			if (c->in_function) {
+				declare_local(c, node->as.let_stmt.name, (int)strlen(node->as.let_stmt.name));
+			} else {
+				emit_global(c, OP_DEFINE_GLOBAL, node->as.let_stmt.name, node->line);
+			}
+			break;
+		case NODE_FN_DECL:
+			compile_function_decl(c, node);
+			break;
+		case NODE_RETURN:
+			compile_return(c, node);
 			break;
 		default:
 			compile_error(c, node->line, "Unsupported statement node.");
@@ -261,8 +391,7 @@ bool compile_program(Node *program, Chunk *out_chunk) {
 	}
 
 	Compiler c;
-	c.chunk = out_chunk;
-	c.had_error = false;
+	compiler_init(&c, out_chunk, false);
 
 	chunk_init(out_chunk);
 
@@ -271,5 +400,7 @@ bool compile_program(Node *program, Chunk *out_chunk) {
 	}
 
 	emit_byte(&c, OP_RETURN, program->line);
-	return !c.had_error;
+	bool ok = !c.had_error;
+	compiler_free(&c);
+	return ok;
 }

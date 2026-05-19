@@ -10,7 +10,9 @@ static void parser_synchronize(Parser *p);
 static Node *parse_declaration(Parser *p);
 static Node *parse_statement(Parser *p);
 static Node *parse_let_declaration(Parser *p);
+static Node *parse_fn_declaration(Parser *p);
 static Node *parse_print_statement(Parser *p);
+static Node *parse_return_statement(Parser *p);
 static Node *parse_expression_statement(Parser *p);
 
 static Node *parse_expression(Parser *p);
@@ -100,10 +102,10 @@ static void parser_synchronize(Parser *p) {
 
 		switch (p->current.type) {
 			case TOK_LET:
+			case TOK_FN:
 			case TOK_IF:
 			case TOK_WHILE:
 			case TOK_FOR:
-			case TOK_FN:
 			case TOK_RETURN:
 			case TOK_PRINT:
 				return;
@@ -153,6 +155,21 @@ static Node *new_call(Node *callee, Node **args, int arg_count, int line) {
 	n->as.call.callee = callee;
 	n->as.call.args = args;
 	n->as.call.arg_count = arg_count;
+	return n;
+}
+
+static Node *new_fn_decl(Token name, char **params, int param_count, Node *body) {
+	Node *n = node_new(NODE_FN_DECL, name.line);
+	n->as.fn_decl.name = node_strdup(name.start, name.length);
+	n->as.fn_decl.params = params;
+	n->as.fn_decl.param_count = param_count;
+	n->as.fn_decl.body = body;
+	return n;
+}
+
+static Node *new_return(Node *value, int line) {
+	Node *n = node_new(NODE_RETURN, line);
+	n->as.return_stmt.value = value;
 	return n;
 }
 
@@ -229,6 +246,58 @@ static Node *parse_primary(Parser *p) {
 
 	parser_error_at_current(p, "Expect expression.");
 	return node_new(NODE_NIL_LIT, p->current.line);
+}
+
+static Node *parse_block_program(Parser *p) {
+	Node *block = node_program();
+
+	while (!parser_check(p, TOK_RBRACE) && !parser_check(p, TOK_EOF)) {
+		Node *decl = parse_declaration(p);
+		node_program_add(block, decl);
+
+		if (p->panic_mode) {
+			parser_synchronize(p);
+		}
+	}
+
+	return block;
+}
+
+static Node *parse_fn_declaration(Parser *p) {
+	parser_consume(p, TOK_IDENT, "Expect function name after 'fn'.");
+	Token name = p->previous;
+
+	parser_consume(p, TOK_LPAREN, "Expect '(' after function name.");
+
+	char **params = NULL;
+	int param_count = 0;
+	int capacity = 0;
+	if (!parser_check(p, TOK_RPAREN)) {
+		for (;;) {
+			parser_consume(p, TOK_IDENT, "Expect parameter name.");
+			Token param = p->previous;
+			if (param_count + 1 > capacity) {
+				capacity = capacity < 4 ? 4 : capacity * 2;
+				params = (char **)realloc(params, sizeof(char *) * (size_t)capacity);
+				if (params == NULL) {
+					fprintf(stderr, "piko: out of memory\n");
+					exit(1);
+				}
+			}
+			params[param_count++] = node_strdup(param.start, param.length);
+			if (!parser_match(p, TOK_COMMA)) {
+				break;
+			}
+		}
+	}
+
+	parser_consume(p, TOK_RPAREN, "Expect ')' after parameters.");
+	parser_consume(p, TOK_LBRACE, "Expect '{' before function body.");
+
+	Node *body = parse_block_program(p);
+	parser_consume(p, TOK_RBRACE, "Expect '}' after function body.");
+
+	return new_fn_decl(name, params, param_count, body);
 }
 
 static Node *parse_unary(Parser *p) {
@@ -362,6 +431,16 @@ static Node *parse_let_declaration(Parser *p) {
 	return n;
 }
 
+static Node *parse_return_statement(Parser *p) {
+	int line = p->previous.line;
+	Node *value = NULL;
+	if (!parser_check(p, TOK_SEMICOLON)) {
+		value = parse_expression(p);
+	}
+	parser_consume(p, TOK_SEMICOLON, "Expect ';' after return statement.");
+	return new_return(value, line);
+}
+
 static Node *parse_print_statement(Parser *p) {
 	int line = p->previous.line;
 
@@ -388,10 +467,16 @@ static Node *parse_statement(Parser *p) {
 	if (parser_match(p, TOK_PRINT)) {
 		return parse_print_statement(p);
 	}
+	if (parser_match(p, TOK_RETURN)) {
+		return parse_return_statement(p);
+	}
 	return parse_expression_statement(p);
 }
 
 static Node *parse_declaration(Parser *p) {
+	if (parser_match(p, TOK_FN)) {
+		return parse_fn_declaration(p);
+	}
 	if (parser_match(p, TOK_LET)) {
 		return parse_let_declaration(p);
 	}

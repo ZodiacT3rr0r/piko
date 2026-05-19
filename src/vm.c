@@ -9,6 +9,7 @@ static void runtime_error(VM *vm, const char *format, ...);
 static void push(VM *vm, Value value);
 static Value pop(VM *vm);
 static Value peek(VM *vm, int distance);
+static CallFrame *current_frame(VM *vm);
 static uint8_t read_byte(VM *vm);
 static Value read_constant(VM *vm);
 static bool values_equal(Value a, Value b);
@@ -34,8 +35,7 @@ static void ensure_global_capacity(VM *vm) {
 }
 
 void vm_init(VM *vm) {
-	vm->chunk = NULL;
-	vm->ip = NULL;
+	vm->frame_count = 0;
 	vm->stack_top = vm->stack;
 	vm->globals = NULL;
 	vm->globals_count = 0;
@@ -59,6 +59,10 @@ void vm_define_native(VM *vm, const char *name, int arity, bool (*function)(int 
 	obj_free((Obj *)copy);
 }
 
+static CallFrame *current_frame(VM *vm) {
+	return &vm->frames[vm->frame_count - 1];
+}
+
 static void push(VM *vm, Value value) {
 	*vm->stack_top = value;
 	vm->stack_top++;
@@ -74,12 +78,14 @@ static Value peek(VM *vm, int distance) {
 }
 
 static uint8_t read_byte(VM *vm) {
-	return *vm->ip++;
+	CallFrame *frame = current_frame(vm);
+	return *frame->ip++;
 }
 
 static Value read_constant(VM *vm) {
+	CallFrame *frame = current_frame(vm);
 	uint8_t index = read_byte(vm);
-	return vm->chunk->constants.values[index];
+	return frame->chunk->constants.values[index];
 }
 
 static bool is_string_value(Value value) {
@@ -228,9 +234,29 @@ static bool call_native(VM *vm, ObjNative *native, int arg_count) {
 	return true;
 }
 
+static bool call_function(VM *vm, ObjFunction *function, int arg_count) {
+	if (arg_count != function->arity) {
+		runtime_error(vm, "%s expects %d arguments.", function->name, function->arity);
+		return false;
+	}
+
+	if (vm->frame_count >= (int)(sizeof(vm->frames) / sizeof(vm->frames[0]))) {
+		runtime_error(vm, "Call stack overflow.");
+		return false;
+	}
+
+	CallFrame *frame = &vm->frames[vm->frame_count++];
+	frame->chunk = &function->chunk;
+	frame->ip = function->chunk.code;
+	frame->slots = vm->stack_top - arg_count - 1;
+	return true;
+}
+
 InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
-	vm->chunk = chunk;
-	vm->ip = chunk->code;
+	vm->frame_count = 1;
+	vm->frames[0].chunk = chunk;
+	vm->frames[0].ip = chunk->code;
+	vm->frames[0].slots = vm->stack;
 	vm->stack_top = vm->stack;
 
 	for (;;) {
@@ -251,6 +277,16 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 			case OP_POP:
 				pop(vm);
 				break;
+			case OP_GET_LOCAL: {
+				uint8_t slot = read_byte(vm);
+				push(vm, current_frame(vm)->slots[slot]);
+				break;
+			}
+			case OP_SET_LOCAL: {
+				uint8_t slot = read_byte(vm);
+				current_frame(vm)->slots[slot] = peek(vm, 0);
+				break;
+			}
 			case OP_GET_GLOBAL: {
 				Value constant = read_constant(vm);
 				ObjString *name = (ObjString *)AS_OBJ(constant);
@@ -335,12 +371,25 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 			case OP_CALL: {
 				int arg_count = (int)read_byte(vm);
 				Value callee = peek(vm, arg_count);
-				if (!IS_OBJ(callee) || OBJ_TYPE(AS_OBJ(callee)) != OBJ_NATIVE) {
-					runtime_error(vm, "Can only call native functions in this build.");
+				if (!IS_OBJ(callee)) {
+					runtime_error(vm, "Can only call functions.");
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
-				if (!call_native(vm, (ObjNative *)AS_OBJ(callee), arg_count)) {
-					return VM_INTERPRET_RUNTIME_ERROR;
+
+				switch (OBJ_TYPE(AS_OBJ(callee))) {
+					case OBJ_NATIVE:
+						if (!call_native(vm, (ObjNative *)AS_OBJ(callee), arg_count)) {
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						break;
+					case OBJ_FUNCTION:
+						if (!call_function(vm, (ObjFunction *)AS_OBJ(callee), arg_count)) {
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						break;
+					default:
+						runtime_error(vm, "Can only call functions.");
+						return VM_INTERPRET_RUNTIME_ERROR;
 				}
 				break;
 			}
@@ -375,8 +424,22 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				print_value(pop(vm));
 				printf("\n");
 				break;
-			case OP_RETURN:
-				return VM_INTERPRET_OK;
+			case OP_RETURN: {
+				CallFrame *frame = current_frame(vm);
+				if (vm->frame_count == 1) {
+					return VM_INTERPRET_OK;
+				}
+
+				Value result = NIL_VAL;
+				if (vm->stack_top > frame->slots) {
+					result = pop(vm);
+				}
+
+				vm->frame_count--;
+				vm->stack_top = frame->slots;
+				push(vm, result);
+				break;
+			}
 			default:
 				runtime_error(vm, "Unknown opcode %d.", instruction);
 				return VM_INTERPRET_RUNTIME_ERROR;
