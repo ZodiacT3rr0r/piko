@@ -1,0 +1,11 @@
+fn make_counter() {
+    let count = 0;
+    return fn() {
+        count = count + 1;
+        return count;
+    };
+}
+
+let c = make_counter();
+print(c());
+print(c());

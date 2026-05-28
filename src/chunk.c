@@ -109,6 +109,18 @@ int disassemble_instruction(const Chunk *chunk, int offset) {
 			return simple_instruction("OP_NOT", offset);
 		case OP_NEGATE:
 			return simple_instruction("OP_NEGATE", offset);
+		case OP_CLOSURE: {
+			uint8_t constant = chunk->code[offset + 1];
+			uint8_t capture_count = chunk->code[offset + 2];
+			printf("%-16s %4d captures=%d\n", "OP_CLOSURE", constant, capture_count);
+			for (int i = 0; i < capture_count; i++) {
+				printf("      |            slot=%d\n", chunk->code[offset + 3 + i]);
+			}
+			return offset + 3 + capture_count;
+		}
+		case OP_GET_UPVALUE:
+			printf("%-16s %4d\n", "OP_GET_UPVALUE", chunk->code[offset + 1]);
+			return offset + 2;
 		case OP_CALL:
 			printf("%-16s %4d\n", "OP_CALL", chunk->code[offset + 1]);
 			return offset + 2;

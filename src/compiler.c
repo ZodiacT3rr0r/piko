@@ -3,15 +3,27 @@
 #include "object.h"
 
 typedef struct {
+	const char *name;
+	int length;
+} Local;
+
+typedef struct {
+	const char *name;
+	int length;
+	int outer_slot;
+} Upvalue;
+
+typedef struct Compiler {
 	Chunk *chunk;
+	struct Compiler *enclosing;
 	bool had_error;
 	bool in_function;
-	struct {
-		const char *name;
-		int length;
-	} *locals;
+	Local *locals;
 	int local_count;
 	int local_capacity;
+	Upvalue *upvalues;
+	int upvalue_count;
+	int upvalue_capacity;
 } Compiler;
 
 static void compile_expression(Compiler *c, Node *node);
@@ -43,20 +55,40 @@ static int make_constant(Compiler *c, Value value, int line) {
 	return constant;
 }
 
-static void compiler_init(Compiler *c, Chunk *chunk, bool in_function) {
+static void emit_constant(Compiler *c, Value value, int line) {
+	int constant = make_constant(c, value, line);
+	emit_bytes(c, OP_CONSTANT, (uint8_t)constant, line);
+}
+
+static void emit_global(Compiler *c, OpCode op, const char *name, int line) {
+	int length = (int)strlen(name);
+	ObjString *str = obj_string_copy(name, length);
+	int constant = make_constant(c, OBJ_VAL(str), line);
+	emit_bytes(c, (uint8_t)op, (uint8_t)constant, line);
+}
+
+static void compiler_init(Compiler *c, Chunk *chunk, bool in_function, Compiler *enclosing) {
 	c->chunk = chunk;
+	c->enclosing = enclosing;
 	c->had_error = false;
 	c->in_function = in_function;
 	c->locals = NULL;
 	c->local_capacity = 0;
+	c->upvalues = NULL;
+	c->upvalue_capacity = 0;
+	c->upvalue_count = 0;
 	c->local_count = in_function ? 1 : 0;
 }
 
 static void compiler_free(Compiler *c) {
 	free(c->locals);
+	free(c->upvalues);
 	c->locals = NULL;
+	c->upvalues = NULL;
 	c->local_capacity = 0;
+	c->upvalue_capacity = 0;
 	c->local_count = 0;
+	c->upvalue_count = 0;
 }
 
 static void ensure_local_capacity(Compiler *c) {
@@ -73,6 +105,22 @@ static void ensure_local_capacity(Compiler *c) {
 
 	c->locals = memory;
 	c->local_capacity = new_capacity;
+}
+
+static void ensure_upvalue_capacity(Compiler *c) {
+	if (c->upvalue_count + 1 <= c->upvalue_capacity) {
+		return;
+	}
+
+	int new_capacity = c->upvalue_capacity < 8 ? 8 : c->upvalue_capacity * 2;
+	void *memory = realloc(c->upvalues, sizeof(*c->upvalues) * (size_t)new_capacity);
+	if (memory == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	c->upvalues = memory;
+	c->upvalue_capacity = new_capacity;
 }
 
 static void declare_local(Compiler *c, const char *name, int length) {
@@ -92,20 +140,42 @@ static int resolve_local(Compiler *c, const char *name, int length) {
 	return -1;
 }
 
+static int add_upvalue(Compiler *c, const char *name, int length, int outer_slot) {
+	for (int i = 0; i < c->upvalue_count; i++) {
+		if (c->upvalues[i].length == length &&
+			memcmp(c->upvalues[i].name, name, (size_t)length) == 0 &&
+			c->upvalues[i].outer_slot == outer_slot) {
+			return i;
+		}
+	}
+
+	if (c->upvalue_count >= 255) {
+		return -1;
+	}
+
+	ensure_upvalue_capacity(c);
+	c->upvalues[c->upvalue_count].name = name;
+	c->upvalues[c->upvalue_count].length = length;
+	c->upvalues[c->upvalue_count].outer_slot = outer_slot;
+	c->upvalue_count++;
+	return c->upvalue_count - 1;
+}
+
+static int resolve_upvalue(Compiler *c, const char *name, int length) {
+	if (c->enclosing == NULL) {
+		return -1;
+	}
+
+	int outer_slot = resolve_local(c->enclosing, name, length);
+	if (outer_slot >= 0) {
+		return add_upvalue(c, name, length, outer_slot);
+	}
+
+	return -1;
+}
+
 static void emit_local(Compiler *c, OpCode op, int slot, int line) {
 	emit_bytes(c, (uint8_t)op, (uint8_t)slot, line);
-}
-
-static void emit_constant(Compiler *c, Value value, int line) {
-	int constant = make_constant(c, value, line);
-	emit_bytes(c, OP_CONSTANT, (uint8_t)constant, line);
-}
-
-static void emit_global(Compiler *c, OpCode op, const char *name, int line) {
-	int length = (int)strlen(name);
-	ObjString *str = obj_string_copy(name, length);
-	int constant = make_constant(c, OBJ_VAL(str), line);
-	emit_bytes(c, (uint8_t)op, (uint8_t)constant, line);
 }
 
 static void compile_binary(Compiler *c, Node *node) {
@@ -191,15 +261,20 @@ static void compile_function_body(Compiler *c, Node *body) {
 	emit_byte(c, OP_RETURN, body->line);
 }
 
-static void compile_function_decl(Compiler *c, Node *node) {
-	if (c->in_function) {
-		compile_error(c, node->line, "Nested function declarations are not supported yet.");
-		return;
+static void emit_closure(Compiler *c, ObjFunction *function, Compiler *inner, int line) {
+	int constant = make_constant(c, OBJ_VAL(function), line);
+	emit_byte(c, OP_CLOSURE, line);
+	emit_byte(c, (uint8_t)constant, line);
+	emit_byte(c, (uint8_t)inner->upvalue_count, line);
+	for (int i = 0; i < inner->upvalue_count; i++) {
+		emit_byte(c, (uint8_t)inner->upvalues[i].outer_slot, line);
 	}
+}
 
+static void compile_function_decl(Compiler *c, Node *node) {
 	ObjFunction *function = obj_function_new(node->as.fn_decl.name, node->as.fn_decl.param_count);
 	Compiler inner;
-	compiler_init(&inner, &function->chunk, true);
+	compiler_init(&inner, &function->chunk, true, c);
 
 	for (int i = 0; i < node->as.fn_decl.param_count; i++) {
 		declare_local(&inner, node->as.fn_decl.params[i], (int)strlen(node->as.fn_decl.params[i]));
@@ -213,9 +288,14 @@ static void compile_function_decl(Compiler *c, Node *node) {
 		return;
 	}
 
+	emit_closure(c, function, &inner, node->line);
+	if (c->in_function) {
+		declare_local(c, node->as.fn_decl.name, (int)strlen(node->as.fn_decl.name));
+	} else {
+		emit_global(c, OP_DEFINE_GLOBAL, node->as.fn_decl.name, node->line);
+	}
+
 	compiler_free(&inner);
-	emit_constant(c, OBJ_VAL(function), node->line);
-	emit_global(c, OP_DEFINE_GLOBAL, node->as.fn_decl.name, node->line);
 }
 
 static void compile_return(Compiler *c, Node *node) {
@@ -233,7 +313,6 @@ static void compile_return(Compiler *c, Node *node) {
 }
 
 static void compile_array(Compiler *c, Node *node) {
-	/* create constants for each element and build an ObjArray constant */
 	int count = node->as.array.count;
 	Value *vals = NULL;
 	if (count > 0) {
@@ -246,12 +325,6 @@ static void compile_array(Compiler *c, Node *node) {
 
 	for (int i = 0; i < count; i++) {
 		Node *elem = node->as.array.items[i];
-		/* after compiling expression it would push value at runtime; instead for constant array
-		   we create constants for each element by adding them to chunk->constants directly */
-		/* Evaluate element as constant: if element is literal or string/ident handled earlier
-		   we can create constants by compiling the literal to a Value here. Simpler: compile
-		   element to a constant by invoking make_constant on its Value representation if possible.
-		   For now, restrict array literals to literal constants only: numbers, strings, bool, nil. */
 		switch (elem->type) {
 			case NODE_INT_LIT:
 				vals[i] = NUMBER_VAL((double)elem->as.int_val);
@@ -277,10 +350,8 @@ static void compile_array(Compiler *c, Node *node) {
 		}
 	}
 
-	/* Create ObjArray object */
 	ObjArray *arr = obj_array_new(vals, count);
 	free(vals);
-
 	emit_constant(c, OBJ_VAL(arr), node->line);
 }
 
@@ -318,11 +389,18 @@ static void compile_expression(Compiler *c, Node *node) {
 			int local = resolve_local(c, node->as.ident.name, node->as.ident.length);
 			if (local >= 0) {
 				emit_local(c, OP_GET_LOCAL, local, node->line);
-			} else {
-				ObjString *name = obj_string_copy(node->as.ident.name, node->as.ident.length);
-				int constant = make_constant(c, OBJ_VAL(name), node->line);
-				emit_bytes(c, OP_GET_GLOBAL, (uint8_t)constant, node->line);
+				break;
 			}
+
+			int upvalue = resolve_upvalue(c, node->as.ident.name, node->as.ident.length);
+			if (upvalue >= 0) {
+				emit_local(c, OP_GET_UPVALUE, upvalue, node->line);
+				break;
+			}
+
+			ObjString *name = obj_string_copy(node->as.ident.name, node->as.ident.length);
+			int constant = make_constant(c, OBJ_VAL(name), node->line);
+			emit_bytes(c, OP_GET_GLOBAL, (uint8_t)constant, node->line);
 			break;
 		}
 		case NODE_GROUPING:
@@ -391,8 +469,7 @@ bool compile_program(Node *program, Chunk *out_chunk) {
 	}
 
 	Compiler c;
-	compiler_init(&c, out_chunk, false);
-
+	compiler_init(&c, out_chunk, false, NULL);
 	chunk_init(out_chunk);
 
 	for (int i = 0; i < program->as.program.count; i++) {

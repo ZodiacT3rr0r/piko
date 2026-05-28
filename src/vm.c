@@ -40,6 +40,7 @@ void vm_init(VM *vm) {
 	vm->globals = NULL;
 	vm->globals_count = 0;
 	vm->globals_capacity = 0;
+	vm->open_upvalues = NULL;
 }
 
 void vm_free(VM *vm) {
@@ -49,7 +50,47 @@ void vm_free(VM *vm) {
 		}
 		free(vm->globals);
 	}
+
+	/* Free any remaining open upvalues. */
+	while (vm->open_upvalues != NULL) {
+		ObjUpvalue *up = vm->open_upvalues;
+		vm->open_upvalues = up->next;
+		obj_free((Obj *)up);
+	}
+
 	vm_init(vm);
+}
+
+static ObjUpvalue *capture_upvalue(VM *vm, Value *local) {
+	ObjUpvalue *prev = NULL;
+	ObjUpvalue *up = vm->open_upvalues;
+
+	while (up != NULL && up->location > local) {
+		prev = up;
+		up = up->next;
+	}
+
+	if (up != NULL && up->location == local) {
+		return up;
+	}
+
+	ObjUpvalue *created = obj_upvalue_new(local);
+	created->next = up;
+	if (prev == NULL) {
+		vm->open_upvalues = created;
+	} else {
+		prev->next = created;
+	}
+	return created;
+}
+
+static void close_upvalues(VM *vm, Value *last) {
+	while (vm->open_upvalues != NULL && vm->open_upvalues->location >= last) {
+		ObjUpvalue *up = vm->open_upvalues;
+		up->closed = *up->location;
+		up->location = &up->closed;
+		vm->open_upvalues = up->next;
+	}
 }
 
 void vm_define_native(VM *vm, const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result)) {
@@ -234,7 +275,8 @@ static bool call_native(VM *vm, ObjNative *native, int arg_count) {
 	return true;
 }
 
-static bool call_function(VM *vm, ObjFunction *function, int arg_count) {
+static bool call_closure(VM *vm, ObjClosure *closure, int arg_count) {
+	ObjFunction *function = closure->function;
 	if (arg_count != function->arity) {
 		runtime_error(vm, "%s expects %d arguments.", function->name, function->arity);
 		return false;
@@ -249,6 +291,7 @@ static bool call_function(VM *vm, ObjFunction *function, int arg_count) {
 	frame->chunk = &function->chunk;
 	frame->ip = function->chunk.code;
 	frame->slots = vm->stack_top - arg_count - 1;
+	frame->closure = closure;
 	return true;
 }
 
@@ -257,6 +300,7 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 	vm->frames[0].chunk = chunk;
 	vm->frames[0].ip = chunk->code;
 	vm->frames[0].slots = vm->stack;
+	vm->frames[0].closure = NULL;
 	vm->stack_top = vm->stack;
 
 	for (;;) {
@@ -368,6 +412,43 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 			case OP_NOT:
 				push(vm, BOOL_VAL(is_falsey(pop(vm))));
 				break;
+			case OP_NEGATE:
+				if (!IS_NUMBER(peek(vm, 0))) {
+					runtime_error(vm, "Operand must be a number.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				push(vm, NUMBER_VAL(-AS_NUMBER(pop(vm))));
+				break;
+			case OP_CLOSURE: {
+				Value function_val = read_constant(vm);
+				uint8_t capture_count = read_byte(vm);
+				if (!IS_OBJ(function_val) || OBJ_TYPE(AS_OBJ(function_val)) != OBJ_FUNCTION) {
+					runtime_error(vm, "Closure constant must be a function.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+
+				ObjFunction *function = (ObjFunction *)AS_OBJ(function_val);
+				ObjClosure *closure = obj_closure_new(function, (int)capture_count);
+				CallFrame *frame = current_frame(vm);
+				for (int i = 0; i < (int)capture_count; i++) {
+					uint8_t slot = read_byte(vm);
+					ObjUpvalue *up = capture_upvalue(vm, &frame->slots[slot]);
+					closure->captures[i] = up;
+				}
+				push(vm, OBJ_VAL(closure));
+				break;
+			}
+			case OP_GET_UPVALUE: {
+				uint8_t index = read_byte(vm);
+				CallFrame *frame = current_frame(vm);
+				if (frame->closure == NULL || index >= (uint8_t)frame->closure->capture_count) {
+					runtime_error(vm, "Invalid upvalue read.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				ObjUpvalue *up = frame->closure->captures[index];
+				push(vm, *up->location);
+				break;
+			}
 			case OP_CALL: {
 				int arg_count = (int)read_byte(vm);
 				Value callee = peek(vm, arg_count);
@@ -382,8 +463,8 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 							return VM_INTERPRET_RUNTIME_ERROR;
 						}
 						break;
-					case OBJ_FUNCTION:
-						if (!call_function(vm, (ObjFunction *)AS_OBJ(callee), arg_count)) {
+					case OBJ_CLOSURE:
+						if (!call_closure(vm, (ObjClosure *)AS_OBJ(callee), arg_count)) {
 							return VM_INTERPRET_RUNTIME_ERROR;
 						}
 						break;
@@ -413,13 +494,6 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				push(vm, a->items[idx]);
 				break;
 			}
-			case OP_NEGATE:
-				if (!IS_NUMBER(peek(vm, 0))) {
-					runtime_error(vm, "Operand must be a number.");
-					return VM_INTERPRET_RUNTIME_ERROR;
-				}
-				push(vm, NUMBER_VAL(-AS_NUMBER(pop(vm))));
-				break;
 			case OP_PRINT:
 				print_value(pop(vm));
 				printf("\n");
@@ -434,6 +508,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				if (vm->stack_top > frame->slots) {
 					result = pop(vm);
 				}
+
+				/* Close any upvalues that were capturing slots in this frame. */
+				close_upvalues(vm, frame->slots);
 
 				vm->frame_count--;
 				vm->stack_top = frame->slots;

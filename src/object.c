@@ -41,6 +41,30 @@ ObjFunction *obj_function_new(const char *name, int arity) {
 	return function;
 }
 
+ObjClosure *obj_closure_new(ObjFunction *function, int capture_count) {
+	ObjClosure *closure = (ObjClosure *)malloc(sizeof(ObjClosure));
+	if (closure == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	closure->obj.type = OBJ_CLOSURE;
+	closure->function = function;
+	closure->capture_count = capture_count;
+	if (capture_count > 0) {
+		closure->captures = (struct ObjUpvalue **)calloc((size_t)capture_count, sizeof(struct ObjUpvalue *));
+		if (closure->captures == NULL) {
+			free(closure);
+			fprintf(stderr, "piko: out of memory\n");
+			exit(1);
+		}
+	} else {
+		closure->captures = NULL;
+	}
+
+	return closure;
+}
+
 ObjNative *obj_native_new(const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result)) {
 	ObjNative *native = (ObjNative *)malloc(sizeof(ObjNative));
 	if (native == NULL) {
@@ -81,6 +105,20 @@ ObjArray *obj_array_new(Value *items, int count) {
 	return arr;
 }
 
+ObjUpvalue *obj_upvalue_new(Value *location) {
+	ObjUpvalue *up = (ObjUpvalue *)malloc(sizeof(ObjUpvalue));
+	if (up == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	up->obj.type = OBJ_UPVALUE;
+	up->location = location;
+	up->closed = NIL_VAL;
+	up->next = NULL;
+	return up;
+}
+
 void obj_print(Obj *obj) {
 	switch (obj->type) {
 		case OBJ_STRING: {
@@ -91,6 +129,11 @@ void obj_print(Obj *obj) {
 		case OBJ_FUNCTION: {
 			ObjFunction *function = (ObjFunction *)obj;
 			printf("<fn %s>", function->name);
+			break;
+		}
+		case OBJ_CLOSURE: {
+			ObjClosure *closure = (ObjClosure *)obj;
+			printf("<closure %s>", closure->function->name);
 			break;
 		}
 		case OBJ_NATIVE: {
@@ -124,6 +167,16 @@ void obj_free(Obj *obj) {
 			free(function->name);
 			chunk_free(&function->chunk);
 			free(function);
+			break;
+		}
+		case OBJ_CLOSURE: {
+			ObjClosure *closure = (ObjClosure *)obj;
+			free(closure->captures);
+			free(closure);
+			break;
+		}
+		case OBJ_UPVALUE: {
+			free(obj);
 			break;
 		}
 		case OBJ_NATIVE: {

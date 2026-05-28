@@ -3,6 +3,9 @@
 
 #include "chunk.h"
 
+typedef struct ObjClosure ObjClosure;
+typedef struct ObjUpvalue ObjUpvalue;
+
 typedef enum {
 	VM_INTERPRET_OK,
 	VM_INTERPRET_RUNTIME_ERROR,
@@ -12,6 +15,7 @@ typedef struct {
 	const Chunk *chunk;
 	const uint8_t *ip;
 	Value *slots;
+	ObjClosure *closure;
 } CallFrame;
 
 typedef struct {
@@ -20,6 +24,7 @@ typedef struct {
 
 	Value stack[256];
 	Value *stack_top;
+	ObjUpvalue *open_upvalues;
 
 	struct {
 		char *name;
