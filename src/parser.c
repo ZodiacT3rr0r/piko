@@ -23,6 +23,7 @@ static Node *parse_factor(Parser *p);
 static Node *parse_unary(Parser *p);
 static Node *parse_call(Parser *p);
 static Node *parse_primary(Parser *p);
+static Node *parse_block_program(Parser *p);
 
 static void parser_error_at(Parser *p, Token token, const char *message) {
 	if (p->panic_mode) {
@@ -234,6 +235,55 @@ static Node *parse_primary(Parser *p) {
 	}
 	if (parser_match(p, TOK_IDENT)) {
 		return new_ident(p->previous);
+	}
+
+	if (parser_match(p, TOK_FN)) {
+		int line = p->previous.line;
+
+		char *name_str = NULL;
+		if (parser_check(p, TOK_IDENT)) {
+			parser_advance(p);
+			name_str = node_strdup(p->previous.start, p->previous.length);
+		} else {
+			name_str = node_strdup("", 0);
+		}
+
+		parser_consume(p, TOK_LPAREN, "Expect '(' after function name.");
+
+		char **params = NULL;
+		int param_count = 0;
+		int capacity = 0;
+		if (!parser_check(p, TOK_RPAREN)) {
+			for (;;) {
+				parser_consume(p, TOK_IDENT, "Expect parameter name.");
+				Token param = p->previous;
+				if (param_count + 1 > capacity) {
+					capacity = capacity < 4 ? 4 : capacity * 2;
+					params = (char **)realloc(params, sizeof(char *) * (size_t)capacity);
+					if (params == NULL) {
+						fprintf(stderr, "piko: out of memory\n");
+						exit(1);
+					}
+				}
+				params[param_count++] = node_strdup(param.start, param.length);
+				if (!parser_match(p, TOK_COMMA)) {
+					break;
+				}
+			}
+		}
+
+		parser_consume(p, TOK_RPAREN, "Expect ')' after parameters.");
+		parser_consume(p, TOK_LBRACE, "Expect '{' before function body.");
+
+		Node *body = parse_block_program(p);
+		parser_consume(p, TOK_RBRACE, "Expect '}' after function body.");
+
+		Node *n = node_new(NODE_FN_DECL, line);
+		n->as.fn_decl.name = name_str;
+		n->as.fn_decl.params = params;
+		n->as.fn_decl.param_count = param_count;
+		n->as.fn_decl.body = body;
+		return n;
 	}
 	if (parser_match(p, TOK_LPAREN)) {
 		int line = p->previous.line;

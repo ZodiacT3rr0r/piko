@@ -1,0 +1,16 @@
+fn make_multiplier(n) {
+    return fn(x) {
+        return n * x;
+    };
+}
+
+fn compose() {
+    let double = make_multiplier(2);
+    let triple = make_multiplier(3);
+    return fn(x) {
+        return double(triple(x));
+    };
+}
+
+let composed = compose();
+print(composed(4));

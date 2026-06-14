@@ -141,6 +141,10 @@ void obj_print(Obj *obj) {
 			printf("<native fn %s>", native->name);
 			break;
 		}
+		case OBJ_UPVALUE: {
+			printf("<upvalue>");
+			break;
+		}
 			case OBJ_ARRAY: {
 				ObjArray *a = (ObjArray *)obj;
 				printf("[");

@@ -421,6 +421,9 @@ static void compile_expression(Compiler *c, Node *node) {
 		case NODE_BINARY:
 			compile_binary(c, node);
 			break;
+		case NODE_FN_DECL:
+			compile_function_decl(c, node);
+			break;
 		default:
 			compile_error(c, node->line, "Unsupported expression node.");
 			break;
