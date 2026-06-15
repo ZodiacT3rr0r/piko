@@ -1,0 +1,11 @@
+== tests/compile/assignment.piko ==
+0000    1 OP_CONSTANT         0 '1'
+0002    1 OP_DEFINE_GLOBAL    1 'x'
+0004    2 OP_GET_GLOBAL       2 'x'
+0006    2 OP_CONSTANT         3 '2'
+0008    2 OP_ADD          
+0009    2 OP_SET_GLOBAL       4 'x'
+0011    2 OP_POP          
+0012    3 OP_GET_GLOBAL       5 'x'
+0014    3 OP_PRINT        
+0015    1 OP_RETURN       

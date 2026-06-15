@@ -31,6 +31,7 @@ static void compile_statement(Compiler *c, Node *node);
 static void compile_call(Compiler *c, Node *node);
 static void compile_function_decl(Compiler *c, Node *node);
 static void compile_return(Compiler *c, Node *node);
+static void compile_assign(Compiler *c, Node *node);
 
 static void compile_error(Compiler *c, int line, const char *message) {
 	fprintf(stderr, "[line %d] Compile error: %s\n", line, message);
@@ -312,6 +313,24 @@ static void compile_return(Compiler *c, Node *node) {
 	emit_byte(c, OP_RETURN, node->line);
 }
 
+static void compile_assign(Compiler *c, Node *node) {
+	compile_expression(c, node->as.assign.value);
+	
+	int local = resolve_local(c, node->as.assign.name, node->as.assign.length);
+	if (local >= 0) {
+		emit_local(c, OP_SET_LOCAL, local, node->line);
+		return;
+	}
+	
+	int upvalue = resolve_upvalue(c, node->as.assign.name, node->as.assign.length);
+	if (upvalue >= 0) {
+		emit_local(c, OP_SET_UPVALUE, upvalue, node->line);
+		return;
+	}
+	
+	emit_global(c, OP_SET_GLOBAL, node->as.assign.name, node->line);
+}
+
 static void compile_array(Compiler *c, Node *node) {
 	int count = node->as.array.count;
 	Value *vals = NULL;
@@ -421,6 +440,9 @@ static void compile_expression(Compiler *c, Node *node) {
 		case NODE_BINARY:
 			compile_binary(c, node);
 			break;
+		case NODE_ASSIGN:
+			compile_assign(c, node);
+			break;
 		case NODE_FN_DECL:
 			compile_function_decl(c, node);
 			break;
@@ -458,6 +480,9 @@ static void compile_statement(Compiler *c, Node *node) {
 			break;
 		case NODE_RETURN:
 			compile_return(c, node);
+			break;
+		case NODE_ASSIGN:
+			compile_assign(c, node);
 			break;
 		default:
 			compile_error(c, node->line, "Unsupported statement node.");

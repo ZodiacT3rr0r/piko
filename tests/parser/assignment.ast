@@ -1,0 +1,10 @@
+PROGRAM count=3
+  LET name=x
+    INT_LIT value=1
+  EXPR_STMT
+    ASSIGN name=x
+      BINARY op=TOK_PLUS
+        IDENT name=x
+        INT_LIT value=2
+  PRINT_STMT
+    IDENT name=x

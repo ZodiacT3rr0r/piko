@@ -449,6 +449,17 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				push(vm, *up->location);
 				break;
 			}
+			case OP_SET_UPVALUE: {
+				uint8_t index = read_byte(vm);
+				CallFrame *frame = current_frame(vm);
+				if (frame->closure == NULL || index >= (uint8_t)frame->closure->capture_count) {
+					runtime_error(vm, "Invalid upvalue write.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				ObjUpvalue *up = frame->closure->captures[index];
+				*up->location = peek(vm, 0);
+				break;
+			}
 			case OP_CALL: {
 				int arg_count = (int)read_byte(vm);
 				Value callee = peek(vm, arg_count);

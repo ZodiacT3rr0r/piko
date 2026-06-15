@@ -24,6 +24,7 @@ typedef enum {
 	NODE_BINARY,
 	NODE_INDEX,
 	NODE_GROUPING,
+	NODE_ASSIGN,
 } NodeType;
 
 typedef struct Node Node;
@@ -106,6 +107,12 @@ struct Node {
 		struct {
 			Node *expr;
 		} grouping;
+
+		struct {
+			char *name;
+			int length;
+			Node *value;
+		} assign;
 	} as;
 };
 

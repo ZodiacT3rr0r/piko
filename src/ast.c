@@ -114,6 +114,10 @@ void node_free(Node *node) {
 		case NODE_GROUPING:
 			node_free(node->as.grouping.expr);
 			break;
+		case NODE_ASSIGN:
+			free(node->as.assign.name);
+			node_free(node->as.assign.value);
+			break;
 		case NODE_INT_LIT:
 		case NODE_FLOAT_LIT:
 		case NODE_BOOL_LIT:
@@ -144,6 +148,7 @@ const char *node_type_name(NodeType type) {
 		case NODE_BINARY: return "BINARY";
 		case NODE_INDEX: return "INDEX";
 		case NODE_GROUPING: return "GROUPING";
+		case NODE_ASSIGN: return "ASSIGN";
 	}
 	return "UNKNOWN";
 }
@@ -255,6 +260,10 @@ void node_print(Node *node, int indent) {
 		case NODE_GROUPING:
 			printf("\n");
 			node_print(node->as.grouping.expr, indent + 2);
+			break;
+		case NODE_ASSIGN:
+			printf(" name=%s\n", node->as.assign.name);
+			node_print(node->as.assign.value, indent + 2);
 			break;
 	}
 }

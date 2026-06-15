@@ -16,6 +16,7 @@ static Node *parse_return_statement(Parser *p);
 static Node *parse_expression_statement(Parser *p);
 
 static Node *parse_expression(Parser *p);
+static Node *parse_assignment(Parser *p);
 static Node *parse_equality(Parser *p);
 static Node *parse_comparison(Parser *p);
 static Node *parse_term(Parser *p);
@@ -463,8 +464,35 @@ static Node *parse_equality(Parser *p) {
 	return expr;
 }
 
+static Node *parse_assignment(Parser *p) {
+	Node *expr = parse_equality(p);
+	if (parser_match(p, TOK_EQ)) {
+		Token equals = p->previous;
+		if (expr->type != NODE_IDENT) {
+			parser_error_at(p, equals, "Invalid assignment target.");
+			return expr;
+		}
+
+		Token name;
+		name.line = expr->line;
+		name.start = expr->as.ident.name;
+		name.length = expr->as.ident.length;
+		Node *value = parse_assignment(p);
+		char *name_copy = node_strdup(name.start, name.length);
+		Node *assign = node_new(NODE_ASSIGN, name.line);
+		assign->as.assign.name = name_copy;
+		assign->as.assign.length = name.length;
+		assign->as.assign.value = value;
+		expr->as.ident.name = NULL;
+		node_free(expr);
+		return assign;
+	}
+
+	return expr;
+}
+
 static Node *parse_expression(Parser *p) {
-	return parse_equality(p);
+	return parse_assignment(p);
 }
 
 static Node *parse_let_declaration(Parser *p) {
