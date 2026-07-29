@@ -103,6 +103,14 @@ void node_free(Node *node) {
 			}
 			free(node->as.array.items);
 			break;
+		case NODE_MAP:
+			for (int i = 0; i < node->as.map.count; i++) {
+				node_free(node->as.map.keys[i]);
+				node_free(node->as.map.values[i]);
+			}
+			free(node->as.map.keys);
+			free(node->as.map.values);
+			break;
 		case NODE_INDEX:
 			node_free(node->as.index.left);
 			node_free(node->as.index.index);
@@ -145,6 +153,7 @@ const char *node_type_name(NodeType type) {
 		case NODE_UNARY: return "UNARY";
 		case NODE_CALL: return "CALL";
 		case NODE_ARRAY: return "ARRAY";
+		case NODE_MAP: return "MAP";
 		case NODE_BINARY: return "BINARY";
 		case NODE_INDEX: return "INDEX";
 		case NODE_GROUPING: return "GROUPING";
@@ -241,6 +250,19 @@ void node_print(Node *node, int indent) {
 			printf("items=%d\n", node->as.array.count);
 			for (int i = 0; i < node->as.array.count; i++) {
 				node_print(node->as.array.items[i], indent + 4);
+			}
+			break;
+		case NODE_MAP:
+			printf("\n");
+			print_indent(indent + 2);
+			printf("pairs=%d\n", node->as.map.count);
+			for (int i = 0; i < node->as.map.count; i++) {
+				print_indent(indent + 4);
+				printf("key:\n");
+				node_print(node->as.map.keys[i], indent + 6);
+				print_indent(indent + 4);
+				printf("value:\n");
+				node_print(node->as.map.values[i], indent + 6);
 			}
 			break;
 		case NODE_INDEX:

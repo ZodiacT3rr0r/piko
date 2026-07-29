@@ -10,6 +10,7 @@ typedef enum {
 	OBJ_FUNCTION,
 	OBJ_CLOSURE,
 	OBJ_UPVALUE,
+	OBJ_MAP,
 	OBJ_NATIVE,
 	OBJ_ARRAY,
 } ObjType;
@@ -46,6 +47,18 @@ typedef struct ObjUpvalue {
 } ObjUpvalue;
 
 typedef struct {
+	ObjString *key;
+	Value value;
+} ObjMapEntry;
+
+typedef struct {
+	Obj obj;
+	int count;
+	int capacity;
+	ObjMapEntry *entries;
+} ObjMap;
+
+typedef struct {
 	Obj obj;
 	const char *name;
 	int arity;
@@ -64,6 +77,10 @@ ObjString *obj_string_copy(const char *chars, int length);
 ObjFunction *obj_function_new(const char *name, int arity);
 ObjClosure *obj_closure_new(ObjFunction *function, int capture_count);
 ObjUpvalue *obj_upvalue_new(Value *location);
+ObjMap *obj_map_new(void);
+bool obj_map_set(ObjMap *map, const char *key, int length, Value value);
+bool obj_map_get(ObjMap *map, const char *key, int length, Value *out_value);
+bool obj_map_remove(ObjMap *map, const char *key, int length);
 ObjNative *obj_native_new(const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result));
 ObjArray *obj_array_new(Value *items, int count);
 void obj_print(Obj *obj);

@@ -1,0 +1,8 @@
+== tests/compile/collections.piko ==
+0000    1 OP_CONSTANT         0 '{a:1, b:2}'
+0002    1 OP_DEFINE_GLOBAL    1 'm'
+0004    2 OP_GET_GLOBAL       2 'm'
+0006    2 OP_CONSTANT         3 'a'
+0008    2 OP_GET_INDEX    
+0009    2 OP_PRINT        
+0010    1 OP_RETURN       

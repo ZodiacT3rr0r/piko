@@ -1,0 +1,11 @@
+let xs = [1, 2];
+push(xs, 3);
+print(len(xs));
+print(pop(xs));
+
+let m = {"a": 1, "b": 2};
+print(m["a"]);
+print(len(m));
+print(type(m));
+print(contains(m, "b"));
+print(keys(m));

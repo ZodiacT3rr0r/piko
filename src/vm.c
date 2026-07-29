@@ -488,21 +488,44 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 			case OP_GET_INDEX: {
 				Value index = pop(vm);
 				Value array = pop(vm);
-				if (!IS_OBJ(array) || OBJ_TYPE(AS_OBJ(array)) != OBJ_ARRAY) {
-					runtime_error(vm, "Indexing supported only on arrays.");
+				if (!IS_OBJ(array)) {
+					runtime_error(vm, "Indexing supported only on arrays and maps.");
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
-				if (!IS_NUMBER(index)) {
-					runtime_error(vm, "Index must be a number.");
-					return VM_INTERPRET_RUNTIME_ERROR;
+				switch (OBJ_TYPE(AS_OBJ(array))) {
+					case OBJ_ARRAY: {
+						if (!IS_NUMBER(index)) {
+							runtime_error(vm, "Index must be a number.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						ObjArray *a = (ObjArray *)AS_OBJ(array);
+						int idx = (int)AS_NUMBER(index);
+						if (idx < 0 || idx >= a->count) {
+							runtime_error(vm, "Index out of bounds.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						push(vm, a->items[idx]);
+						break;
+					}
+					case OBJ_MAP: {
+						if (!IS_OBJ(index) || OBJ_TYPE(AS_OBJ(index)) != OBJ_STRING) {
+							runtime_error(vm, "Map keys must be strings.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						ObjMap *map = (ObjMap *)AS_OBJ(array);
+						ObjString *key = (ObjString *)AS_OBJ(index);
+						Value value;
+						if (!obj_map_get(map, key->chars, key->length, &value)) {
+							push(vm, NIL_VAL);
+						} else {
+							push(vm, value);
+						}
+						break;
+					}
+					default:
+						runtime_error(vm, "Indexing supported only on arrays and maps.");
+						return VM_INTERPRET_RUNTIME_ERROR;
 				}
-				ObjArray *a = (ObjArray *)AS_OBJ(array);
-				int idx = (int)AS_NUMBER(index);
-				if (idx < 0 || idx >= a->count) {
-					runtime_error(vm, "Index out of bounds.");
-					return VM_INTERPRET_RUNTIME_ERROR;
-				}
-				push(vm, a->items[idx]);
 				break;
 			}
 			case OP_PRINT:

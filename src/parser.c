@@ -228,6 +228,45 @@ static Node *parse_primary(Parser *p) {
 		n->as.array.count = count;
 		return n;
 	}
+	if (parser_match(p, TOK_LBRACE)) {
+		int count = 0;
+		Node **keys = NULL;
+		Node **values = NULL;
+		if (!parser_check(p, TOK_RBRACE)) {
+			int capacity = 0;
+			for (;;) {
+				if (count + 1 > capacity) {
+					capacity = capacity < 4 ? 4 : capacity * 2;
+					keys = (Node **)realloc(keys, sizeof(Node *) * (size_t)capacity);
+					values = (Node **)realloc(values, sizeof(Node *) * (size_t)capacity);
+					if (keys == NULL || values == NULL) {
+						fprintf(stderr, "piko: out of memory\n");
+						exit(1);
+					}
+				}
+
+				if (!parser_check(p, TOK_STRING) && !parser_check(p, TOK_FSTRING)) {
+					parser_error_at_current(p, "Expect string key in map literal.");
+					break;
+				}
+				keys[count] = new_literal_string(p->current);
+				parser_advance(p);
+				parser_consume(p, TOK_COLON, "Expect ':' after map key.");
+				values[count] = parse_expression(p);
+				count++;
+				if (!parser_match(p, TOK_COMMA)) {
+					break;
+				}
+			}
+		}
+
+		parser_consume(p, TOK_RBRACE, "Expect '}' after map literal.");
+		Node *n = node_new(NODE_MAP, p->previous.line);
+		n->as.map.keys = keys;
+		n->as.map.values = values;
+		n->as.map.count = count;
+		return n;
+	}
 	if (parser_match(p, TOK_FLOAT)) {
 		return new_literal_float(p->previous);
 	}

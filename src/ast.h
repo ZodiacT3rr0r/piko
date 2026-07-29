@@ -21,6 +21,7 @@ typedef enum {
 	NODE_UNARY,
 	NODE_CALL,
 	NODE_ARRAY,
+	NODE_MAP,
 	NODE_BINARY,
 	NODE_INDEX,
 	NODE_GROUPING,
@@ -92,6 +93,12 @@ struct Node {
 			Node **items;
 			int count;
 		} array;
+
+		struct {
+			Node **keys;
+			Node **values;
+			int count;
+		} map;
 
 		struct {
 			Node *left;

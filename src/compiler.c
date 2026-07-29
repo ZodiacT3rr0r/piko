@@ -374,6 +374,48 @@ static void compile_array(Compiler *c, Node *node) {
 	emit_constant(c, OBJ_VAL(arr), node->line);
 }
 
+static void compile_map(Compiler *c, Node *node) {
+	ObjMap *map = obj_map_new();
+	for (int i = 0; i < node->as.map.count; i++) {
+		Node *key = node->as.map.keys[i];
+		Node *value = node->as.map.values[i];
+		if (key->type != NODE_STRING_LIT) {
+			compile_error(c, key->line, "Map keys must be string literals in this stage.");
+			obj_free((Obj *)map);
+			return;
+		}
+
+		Value compiled_value = NIL_VAL;
+		switch (value->type) {
+			case NODE_INT_LIT:
+				compiled_value = NUMBER_VAL((double)value->as.int_val);
+				break;
+			case NODE_FLOAT_LIT:
+				compiled_value = NUMBER_VAL(value->as.float_val);
+				break;
+			case NODE_STRING_LIT: {
+				ObjString *s = obj_string_copy(value->as.string_val.chars, value->as.string_val.length);
+				compiled_value = OBJ_VAL(s);
+				break;
+			}
+			case NODE_BOOL_LIT:
+				compiled_value = BOOL_VAL(value->as.bool_val);
+				break;
+			case NODE_NIL_LIT:
+				compiled_value = NIL_VAL;
+				break;
+			default:
+				compile_error(c, value->line, "Map values must be literals in this stage.");
+				obj_free((Obj *)map);
+				return;
+		}
+
+		obj_map_set(map, key->as.string_val.chars, key->as.string_val.length, compiled_value);
+	}
+
+	emit_constant(c, OBJ_VAL(map), node->line);
+}
+
 static void compile_index(Compiler *c, Node *node) {
 	compile_expression(c, node->as.index.left);
 	compile_expression(c, node->as.index.index);
@@ -430,6 +472,9 @@ static void compile_expression(Compiler *c, Node *node) {
 			break;
 		case NODE_ARRAY:
 			compile_array(c, node);
+			break;
+		case NODE_MAP:
+			compile_map(c, node);
 			break;
 		case NODE_CALL:
 			compile_call(c, node);

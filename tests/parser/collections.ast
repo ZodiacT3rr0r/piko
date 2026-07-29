@@ -1,0 +1,18 @@
+PROGRAM count=2
+  LET name=m
+    MAP
+      pairs=2
+        key:
+          STRING_LIT value="a"
+        value:
+          INT_LIT value=1
+        key:
+          STRING_LIT value="b"
+        value:
+          INT_LIT value=2
+  PRINT_STMT
+    INDEX
+      left:
+        IDENT name=m
+      index:
+        STRING_LIT value="a"

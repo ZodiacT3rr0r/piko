@@ -119,6 +119,86 @@ ObjUpvalue *obj_upvalue_new(Value *location) {
 	return up;
 }
 
+static int map_find_entry(ObjMap *map, const char *key, int length) {
+	for (int i = 0; i < map->count; i++) {
+		ObjString *entry_key = map->entries[i].key;
+		if (entry_key->length == length && memcmp(entry_key->chars, key, (size_t)length) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+static void ensure_map_capacity(ObjMap *map) {
+	if (map->count + 1 <= map->capacity) {
+		return;
+	}
+
+	int new_capacity = map->capacity < 8 ? 8 : map->capacity * 2;
+	void *memory = realloc(map->entries, sizeof(*map->entries) * (size_t)new_capacity);
+	if (memory == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	map->entries = memory;
+	map->capacity = new_capacity;
+}
+
+ObjMap *obj_map_new(void) {
+	ObjMap *map = (ObjMap *)malloc(sizeof(ObjMap));
+	if (map == NULL) {
+		fprintf(stderr, "piko: out of memory\n");
+		exit(1);
+	}
+
+	map->obj.type = OBJ_MAP;
+	map->count = 0;
+	map->capacity = 0;
+	map->entries = NULL;
+	return map;
+}
+
+bool obj_map_set(ObjMap *map, const char *key, int length, Value value) {
+	int index = map_find_entry(map, key, length);
+	if (index >= 0) {
+		map->entries[index].value = value;
+		return true;
+	}
+
+	ensure_map_capacity(map);
+	ObjString *copy = obj_string_copy(key, length);
+	map->entries[map->count].key = copy;
+	map->entries[map->count].value = value;
+	map->count++;
+	return true;
+}
+
+bool obj_map_get(ObjMap *map, const char *key, int length, Value *out_value) {
+	int index = map_find_entry(map, key, length);
+	if (index < 0) {
+		return false;
+	}
+
+	*out_value = map->entries[index].value;
+	return true;
+}
+
+bool obj_map_remove(ObjMap *map, const char *key, int length) {
+	int index = map_find_entry(map, key, length);
+	if (index < 0) {
+		return false;
+	}
+
+	free(map->entries[index].key->chars);
+	free(map->entries[index].key);
+	for (int i = index; i < map->count - 1; i++) {
+		map->entries[i] = map->entries[i + 1];
+	}
+	map->count--;
+	return true;
+}
+
 void obj_print(Obj *obj) {
 	switch (obj->type) {
 		case OBJ_STRING: {
@@ -134,6 +214,19 @@ void obj_print(Obj *obj) {
 		case OBJ_CLOSURE: {
 			ObjClosure *closure = (ObjClosure *)obj;
 			printf("<closure %s>", closure->function->name);
+			break;
+		}
+		case OBJ_MAP: {
+			ObjMap *map = (ObjMap *)obj;
+			printf("{");
+			for (int i = 0; i < map->count; i++) {
+				printf("%s:", map->entries[i].key->chars);
+				print_value(map->entries[i].value);
+				if (i + 1 < map->count) {
+					printf(", ");
+				}
+			}
+			printf("}");
 			break;
 		}
 		case OBJ_NATIVE: {
@@ -181,6 +274,19 @@ void obj_free(Obj *obj) {
 		}
 		case OBJ_UPVALUE: {
 			free(obj);
+			break;
+		}
+		case OBJ_MAP: {
+			ObjMap *map = (ObjMap *)obj;
+			for (int i = 0; i < map->count; i++) {
+				free(map->entries[i].key->chars);
+				free(map->entries[i].key);
+				if (IS_OBJ(map->entries[i].value)) {
+					obj_free(AS_OBJ(map->entries[i].value));
+				}
+			}
+			free(map->entries);
+			free(map);
 			break;
 		}
 		case OBJ_NATIVE: {
