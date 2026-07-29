@@ -23,14 +23,6 @@ It is intentionally designed to demonstrate the full implementation path of a re
 
 source text → lexer → parser → AST → compiler → bytecode → VM
 
-## Repository layout
-
-- [src/](src/) — implementation of the language runtime, compiler, and VM
-- [tests/](tests/) — sample `.piko` programs and regression inputs
-- [docs/](docs/) — project notes and explanation docs
-- [Makefile](Makefile) — build automation
-- [.gitignore](.gitignore) — ignored build and editor files
-
 ## Building
 
 Requirements:
@@ -131,7 +123,3 @@ print(counter());
 ## Why this project exists
 
 Piko is a systems programming and language design project. It demonstrates how to build a real language runtime from scratch in C while keeping the codebase small, understandable, and maintainable.
-
-## License
-
-Add a license before public release if you want to allow reuse of the code.
