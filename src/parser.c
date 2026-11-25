@@ -21,6 +21,7 @@ static Node *parse_expression_statement(Parser *p);
 
 static Node *parse_expression(Parser *p);
 static Node *parse_assignment(Parser *p);
+static Node *parse_pipeline(Parser *p);
 static Node *parse_logic_or(Parser *p);
 static Node *parse_logic_and(Parser *p);
 static Node *parse_equality(Parser *p);
@@ -197,6 +198,116 @@ static Node *new_logical(Node *left, TokenType op, Node *right, int line) {
 	return n;
 }
 
+static Node *parse_fstring(Parser *p, Token tok) {
+	const char *s = tok.start;
+	int len = tok.length;
+
+	/* Fast path: no '{' -> treat identically to a plain string literal. */
+	bool has_interp = false;
+	for (int i = 0; i < len; i++) {
+		if (s[i] == '{') {
+			has_interp = true;
+			break;
+		}
+	}
+	if (!has_interp) {
+		return new_literal_string(tok);
+	}
+
+	Node *acc = NULL;
+	int i = 0;
+	while (i < len) {
+		int lit_start = i;
+		while (i < len && s[i] != '{') {
+			i++;
+		}
+		if (i > lit_start) {
+			Token lit;
+			lit.type = TOK_STRING;
+			lit.start = s + lit_start;
+			lit.length = i - lit_start;
+			lit.line = tok.line;
+			Node *part = new_literal_string(lit);
+			acc = acc == NULL ? part : new_binary(acc, TOK_PLUS, part, tok.line);
+		}
+		if (i >= len) {
+			break;
+		}
+
+		/* Skip '{' and locate matching '}' respecting nested braces and quotes. */
+		i++;
+		int expr_start = i;
+		int depth = 1;
+		bool in_quote = false;
+		while (i < len && depth > 0) {
+			char c = s[i];
+			if (c == '\\' && in_quote && i + 1 < len) {
+				i += 2;
+				continue;
+			}
+			if (c == '"') {
+				in_quote = !in_quote;
+			} else if (!in_quote) {
+				if (c == '{') {
+					depth++;
+				} else if (c == '}') {
+					depth--;
+					if (depth == 0) {
+						break;
+					}
+				}
+			}
+			i++;
+		}
+		if (depth != 0) {
+			parser_error_at(p, tok, "Unterminated '{' in f-string.");
+			break;
+		}
+
+		int expr_len = i - expr_start;
+		char *expr_src = node_strdup(s + expr_start, expr_len);
+		Parser sub;
+		lexer_init(&sub.lexer, expr_src);
+		sub.lexer.line = tok.line;
+		sub.had_error = false;
+		sub.panic_mode = false;
+		sub.current.type = TOK_ERROR;
+		sub.current.start = "";
+		sub.current.length = 0;
+		sub.current.line = tok.line;
+		sub.previous = sub.current;
+		parser_advance(&sub);
+		Node *inner = parse_expression(&sub);
+		if (sub.had_error) {
+			p->had_error = true;
+		}
+		free(expr_src);
+
+		Token str_tok;
+		str_tok.type = TOK_IDENT;
+		str_tok.start = "str";
+		str_tok.length = 3;
+		str_tok.line = tok.line;
+		Node **call_args = (Node **)malloc(sizeof(Node *));
+		if (call_args == NULL) {
+			fprintf(stderr, "piko: out of memory\n");
+			exit(1);
+		}
+		call_args[0] = inner;
+		Node *str_call = new_call(new_ident(str_tok), call_args, 1, tok.line);
+		acc = acc == NULL ? str_call : new_binary(acc, TOK_PLUS, str_call, tok.line);
+
+		i++; /* consume '}' */
+	}
+
+	if (acc == NULL) {
+		Token empty = tok;
+		empty.length = 0;
+		return new_literal_string(empty);
+	}
+	return acc;
+}
+
 static Node *parse_primary(Parser *p) {
 	if (parser_match(p, TOK_FALSE)) {
 		Node *n = node_new(NODE_BOOL_LIT, p->previous.line);
@@ -284,8 +395,11 @@ static Node *parse_primary(Parser *p) {
 	if (parser_match(p, TOK_FLOAT)) {
 		return new_literal_float(p->previous);
 	}
-	if (parser_match(p, TOK_STRING) || parser_match(p, TOK_FSTRING)) {
+	if (parser_match(p, TOK_STRING)) {
 		return new_literal_string(p->previous);
+	}
+	if (parser_match(p, TOK_FSTRING)) {
+		return parse_fstring(p, p->previous);
 	}
 	if (parser_match(p, TOK_IDENT)) {
 		return new_ident(p->previous);
@@ -551,28 +665,75 @@ static Node *parse_logic_or(Parser *p) {
 	return expr;
 }
 
-static Node *parse_assignment(Parser *p) {
+static Node *parse_pipeline(Parser *p) {
 	Node *expr = parse_logic_or(p);
+
+	while (parser_match(p, TOK_PIPE_GT)) {
+		int line = p->previous.line;
+		Node *rhs = parse_logic_or(p);
+		if (rhs->type == NODE_CALL) {
+			int new_count = rhs->as.call.arg_count + 1;
+			Node **new_args = (Node **)malloc(sizeof(Node *) * (size_t)new_count);
+			if (new_args == NULL) {
+				fprintf(stderr, "piko: out of memory\n");
+				exit(1);
+			}
+			new_args[0] = expr;
+			for (int i = 0; i < rhs->as.call.arg_count; i++) {
+				new_args[i + 1] = rhs->as.call.args[i];
+			}
+			free(rhs->as.call.args);
+			rhs->as.call.args = new_args;
+			rhs->as.call.arg_count = new_count;
+			rhs->line = line;
+			expr = rhs;
+		} else {
+			Node **args = (Node **)malloc(sizeof(Node *));
+			if (args == NULL) {
+				fprintf(stderr, "piko: out of memory\n");
+				exit(1);
+			}
+			args[0] = expr;
+			expr = new_call(rhs, args, 1, line);
+		}
+	}
+
+	return expr;
+}
+
+static Node *parse_assignment(Parser *p) {
+	Node *expr = parse_pipeline(p);
 	if (parser_match(p, TOK_EQ)) {
 		Token equals = p->previous;
-		if (expr->type != NODE_IDENT) {
-			parser_error_at(p, equals, "Invalid assignment target.");
-			return expr;
+		if (expr->type == NODE_IDENT) {
+			Token name;
+			name.line = expr->line;
+			name.start = expr->as.ident.name;
+			name.length = expr->as.ident.length;
+			Node *value = parse_assignment(p);
+			char *name_copy = node_strdup(name.start, name.length);
+			Node *assign = node_new(NODE_ASSIGN, name.line);
+			assign->as.assign.name = name_copy;
+			assign->as.assign.length = name.length;
+			assign->as.assign.value = value;
+			expr->as.ident.name = NULL;
+			node_free(expr);
+			return assign;
+		}
+		if (expr->type == NODE_INDEX) {
+			Node *value = parse_assignment(p);
+			Node *assign = node_new(NODE_INDEX_ASSIGN, equals.line);
+			assign->as.index_assign.target = expr->as.index.left;
+			assign->as.index_assign.index = expr->as.index.index;
+			assign->as.index_assign.value = value;
+			expr->as.index.left = NULL;
+			expr->as.index.index = NULL;
+			node_free(expr);
+			return assign;
 		}
 
-		Token name;
-		name.line = expr->line;
-		name.start = expr->as.ident.name;
-		name.length = expr->as.ident.length;
-		Node *value = parse_assignment(p);
-		char *name_copy = node_strdup(name.start, name.length);
-		Node *assign = node_new(NODE_ASSIGN, name.line);
-		assign->as.assign.name = name_copy;
-		assign->as.assign.length = name.length;
-		assign->as.assign.value = value;
-		expr->as.ident.name = NULL;
-		node_free(expr);
-		return assign;
+		parser_error_at(p, equals, "Invalid assignment target.");
+		return expr;
 	}
 
 	return expr;
@@ -629,8 +790,48 @@ static Node *parse_while_statement(Parser *p) {
 
 static Node *parse_for_statement(Parser *p) {
 	int line = p->previous.line;
-	parser_consume(p, TOK_LPAREN, "Expect '(' after 'for'.");
 
+	/* Form 1: unparenthesized `for x in iterable { ... }` */
+	if (parser_check(p, TOK_IDENT)) {
+		parser_advance(p);
+		Token var = p->previous;
+		parser_consume(p, TOK_IN, "Expect 'in' after loop variable.");
+		Node *iterable = parse_expression(p);
+		Node *body = parse_statement(p);
+
+		Node *n = node_new(NODE_FOR_IN, line);
+		n->as.for_in_stmt.var_name = node_strdup(var.start, var.length);
+		n->as.for_in_stmt.var_length = var.length;
+		n->as.for_in_stmt.iterable = iterable;
+		n->as.for_in_stmt.body = body;
+		return n;
+	}
+
+	parser_consume(p, TOK_LPAREN, "Expect '(' or loop variable after 'for'.");
+
+	/* Form 2: parenthesized `for (x in iterable) { ... }` or `for (let x in iterable)` */
+	Parser saved = *p;
+	bool saw_let = parser_match(p, TOK_LET);
+	if (parser_check(p, TOK_IDENT)) {
+		parser_advance(p);
+		Token var = p->previous;
+		if (parser_match(p, TOK_IN)) {
+			Node *iterable = parse_expression(p);
+			parser_consume(p, TOK_RPAREN, "Expect ')' after for-in clause.");
+			Node *body = parse_statement(p);
+
+			Node *n = node_new(NODE_FOR_IN, line);
+			n->as.for_in_stmt.var_name = node_strdup(var.start, var.length);
+			n->as.for_in_stmt.var_length = var.length;
+			n->as.for_in_stmt.iterable = iterable;
+			n->as.for_in_stmt.body = body;
+			return n;
+		}
+	}
+	(void)saw_let;
+	*p = saved;
+
+	/* Form 3: C-style `for (init; cond; incr) stmt` */
 	Node *init = NULL;
 	if (parser_match(p, TOK_SEMICOLON)) {
 		init = NULL;

@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 
+#include "memory.h"
 #include "object.h"
 #include "value.h"
 
@@ -13,53 +14,43 @@ static CallFrame *current_frame(VM *vm);
 static uint8_t read_byte(VM *vm);
 static uint16_t read_short(VM *vm);
 static Value read_constant(VM *vm);
-static bool values_equal(Value a, Value b);
 static bool is_falsey(Value value);
-static void define_global(VM *vm, ObjString *name, Value value);
-static bool get_global(VM *vm, ObjString *name, Value *out_value);
-static bool set_global(VM *vm, ObjString *name, Value value);
-
-static void ensure_global_capacity(VM *vm) {
-	if (vm->globals_count + 1 <= vm->globals_capacity) {
-		return;
-	}
-
-	int new_capacity = vm->globals_capacity < 8 ? 8 : vm->globals_capacity * 2;
-	void *memory = realloc(vm->globals, sizeof(*vm->globals) * (size_t)new_capacity);
-	if (memory == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	vm->globals = memory;
-	vm->globals_capacity = new_capacity;
-}
+static InterpretResult vm_run(VM *vm, int stop_frame_count);
 
 void vm_init(VM *vm) {
 	vm->frame_count = 0;
 	vm->stack_top = vm->stack;
-	vm->globals = NULL;
-	vm->globals_count = 0;
-	vm->globals_capacity = 0;
 	vm->open_upvalues = NULL;
+	vm->temp_root_count = 0;
+	table_init(&vm->globals);
+	table_init(&vm->strings);
+	gc_bind_vm(vm);
 }
 
 void vm_free(VM *vm) {
-	if (vm->globals != NULL) {
-		for (int i = 0; i < vm->globals_count; i++) {
-			free(vm->globals[i].name);
-		}
-		free(vm->globals);
-	}
+	gc_set_enabled(false);
+	table_free(&vm->globals);
+	table_free(&vm->strings);
+	vm->open_upvalues = NULL;
+	vm->frame_count = 0;
+	vm->stack_top = vm->stack;
+	vm->temp_root_count = 0;
+	gc_unbind_vm(vm);
+	gc_free_all();
+}
 
-	/* Free any remaining open upvalues. */
-	while (vm->open_upvalues != NULL) {
-		ObjUpvalue *up = vm->open_upvalues;
-		vm->open_upvalues = up->next;
-		obj_free((Obj *)up);
+void vm_push_temp_root(VM *vm, Value value) {
+	if (vm->temp_root_count >= TEMP_ROOTS_MAX) {
+		fprintf(stderr, "piko: GC temp root stack overflow\n");
+		exit(1);
 	}
+	vm->temp_roots[vm->temp_root_count++] = value;
+}
 
-	vm_init(vm);
+void vm_pop_temp_root(VM *vm) {
+	if (vm->temp_root_count > 0) {
+		vm->temp_root_count--;
+	}
 }
 
 static ObjUpvalue *capture_upvalue(VM *vm, Value *local) {
@@ -94,11 +85,14 @@ static void close_upvalues(VM *vm, Value *last) {
 	}
 }
 
-void vm_define_native(VM *vm, const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result)) {
-	ObjString *copy = obj_string_copy(name, (int)strlen(name));
+void vm_define_native(VM *vm, const char *name, int arity, NativeFn function) {
+	ObjString *key = obj_string_copy(name, (int)strlen(name));
+	vm_push_temp_root(vm, OBJ_VAL(key));
 	ObjNative *native = obj_native_new(name, arity, function);
-	define_global(vm, copy, OBJ_VAL(native));
-	obj_free((Obj *)copy);
+	vm_push_temp_root(vm, OBJ_VAL(native));
+	table_set(&vm->globals, key, OBJ_VAL(native));
+	vm_pop_temp_root(vm);
+	vm_pop_temp_root(vm);
 }
 
 static CallFrame *current_frame(VM *vm) {
@@ -145,100 +139,52 @@ static bool is_string_value(Value value) {
 	return IS_OBJ(value) && OBJ_TYPE(AS_OBJ(value)) == OBJ_STRING;
 }
 
-static bool string_equals(ObjString *a, ObjString *b) {
-	if (a->length != b->length) {
-		return false;
-	}
-	return memcmp(a->chars, b->chars, (size_t)a->length) == 0;
-}
-
-static bool values_equal(Value a, Value b) {
-	if (a.type != b.type) {
-		return false;
-	}
-
-	switch (a.type) {
-		case VAL_NIL:
-			return true;
-		case VAL_BOOL:
-			return AS_BOOL(a) == AS_BOOL(b);
-		case VAL_NUMBER:
-			return AS_NUMBER(a) == AS_NUMBER(b);
-		case VAL_OBJ:
-			if (is_string_value(a) && is_string_value(b)) {
-				return string_equals((ObjString *)AS_OBJ(a), (ObjString *)AS_OBJ(b));
-			}
-			return AS_OBJ(a) == AS_OBJ(b);
-	}
-
-	return false;
-}
-
 static bool is_falsey(Value value) {
 	return IS_NIL(value) || (IS_BOOL(value) && !AS_BOOL(value));
 }
 
 static void runtime_error(VM *vm, const char *format, ...) {
-	(void)vm;
+	int line = 0;
+	if (vm != NULL && vm->frame_count > 0) {
+		CallFrame *frame = &vm->frames[vm->frame_count - 1];
+		if (frame->chunk != NULL && frame->chunk->lines != NULL && frame->ip > frame->chunk->code) {
+			size_t instruction = (size_t)(frame->ip - frame->chunk->code - 1);
+			if ((int)instruction < frame->chunk->count) {
+				line = frame->chunk->lines[instruction];
+			}
+		}
+	}
+
+	if (line > 0) {
+		fprintf(stderr, "[line %d] Runtime error: ", line);
+	} else {
+		fprintf(stderr, "Runtime error: ");
+	}
 
 	va_list args;
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
 	fprintf(stderr, "\n");
-}
 
-static int find_global_index(VM *vm, ObjString *name) {
-	for (int i = 0; i < vm->globals_count; i++) {
-		if (vm->globals[i].length == name->length &&
-			memcmp(vm->globals[i].name, name->chars, (size_t)name->length) == 0) {
-			return i;
+	if (vm != NULL) {
+		for (int i = vm->frame_count - 1; i >= 0; i--) {
+			CallFrame *frame = &vm->frames[i];
+			int fline = 0;
+			if (frame->chunk != NULL && frame->chunk->lines != NULL && frame->ip > frame->chunk->code) {
+				size_t inst = (size_t)(frame->ip - frame->chunk->code - 1);
+				if ((int)inst < frame->chunk->count) {
+					fline = frame->chunk->lines[inst];
+				}
+			}
+			const char *fn_name = "<script>";
+			if (frame->closure != NULL && frame->closure->function != NULL &&
+				frame->closure->function->name[0] != '\0') {
+				fn_name = frame->closure->function->name;
+			}
+			fprintf(stderr, "  at [line %d] in %s\n", fline, fn_name);
 		}
 	}
-
-	return -1;
-}
-
-static void define_global(VM *vm, ObjString *name, Value value) {
-	int index = find_global_index(vm, name);
-	if (index >= 0) {
-		vm->globals[index].value = value;
-		return;
-	}
-
-	ensure_global_capacity(vm);
-
-	int length = name->length;
-	vm->globals[vm->globals_count].name = (char *)malloc((size_t)length + 1);
-	if (vm->globals[vm->globals_count].name == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-	memcpy(vm->globals[vm->globals_count].name, name->chars, (size_t)length);
-	vm->globals[vm->globals_count].name[length] = '\0';
-	vm->globals[vm->globals_count].length = length;
-	vm->globals[vm->globals_count].value = value;
-	vm->globals_count++;
-}
-
-static bool get_global(VM *vm, ObjString *name, Value *out_value) {
-	int index = find_global_index(vm, name);
-	if (index < 0) {
-		return false;
-	}
-
-	*out_value = vm->globals[index].value;
-	return true;
-}
-
-static bool set_global(VM *vm, ObjString *name, Value value) {
-	int index = find_global_index(vm, name);
-	if (index < 0) {
-		return false;
-	}
-
-	vm->globals[index].value = value;
-	return true;
 }
 
 static bool binary_number_op(VM *vm, char op) {
@@ -259,8 +205,14 @@ static bool binary_number_op(VM *vm, char op) {
 			return push(vm, NUMBER_VAL(left * right));
 		case '/':
 			return push(vm, NUMBER_VAL(left / right));
-		case '%':
-			return push(vm, NUMBER_VAL((double)((int64_t)left % (int64_t)right)));
+		case '%': {
+			int64_t rhs = (int64_t)right;
+			if (rhs == 0) {
+				runtime_error(vm, "Modulo by zero.");
+				return false;
+			}
+			return push(vm, NUMBER_VAL((double)((int64_t)left % rhs)));
+		}
 	}
 
 	return true;
@@ -273,7 +225,7 @@ static bool call_native(VM *vm, ObjNative *native, int arg_count) {
 	}
 
 	Value result = NIL_VAL;
-	if (!native->function(arg_count, vm->stack_top - arg_count, &result)) {
+	if (!native->function(vm, arg_count, vm->stack_top - arg_count, &result)) {
 		return false;
 	}
 
@@ -301,14 +253,57 @@ static bool call_closure(VM *vm, ObjClosure *closure, int arg_count) {
 	return true;
 }
 
-InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
-	vm->frame_count = 1;
-	vm->frames[0].chunk = chunk;
-	vm->frames[0].ip = chunk->code;
-	vm->frames[0].slots = vm->stack;
-	vm->frames[0].closure = NULL;
-	vm->stack_top = vm->stack;
+bool vm_call_value(VM *vm, Value callee, int arg_count, Value *args, Value *out_result) {
+	if (!IS_OBJ(callee)) {
+		runtime_error(vm, "Can only call functions.");
+		return false;
+	}
 
+	switch (OBJ_TYPE(AS_OBJ(callee))) {
+		case OBJ_NATIVE: {
+			ObjNative *native = (ObjNative *)AS_OBJ(callee);
+			if (arg_count != native->arity) {
+				runtime_error(vm, "%s expects %d arguments.", native->name, native->arity);
+				return false;
+			}
+			if (!push(vm, callee)) {
+				return false;
+			}
+			for (int i = 0; i < arg_count; i++) {
+				if (!push(vm, args[i])) {
+					return false;
+				}
+			}
+			bool ok = native->function(vm, arg_count, vm->stack_top - arg_count, out_result);
+			vm->stack_top -= arg_count + 1;
+			return ok;
+		}
+		case OBJ_CLOSURE: {
+			int base_frames = vm->frame_count;
+			if (!push(vm, callee)) {
+				return false;
+			}
+			for (int i = 0; i < arg_count; i++) {
+				if (!push(vm, args[i])) {
+					return false;
+				}
+			}
+			if (!call_closure(vm, (ObjClosure *)AS_OBJ(callee), arg_count)) {
+				return false;
+			}
+			if (vm_run(vm, base_frames) != VM_INTERPRET_OK) {
+				return false;
+			}
+			*out_result = pop(vm);
+			return true;
+		}
+		default:
+			runtime_error(vm, "Can only call functions.");
+			return false;
+	}
+}
+
+static InterpretResult vm_run(VM *vm, int stop_frame_count) {
 	for (;;) {
 		uint8_t instruction = read_byte(vm);
 		switch (instruction) {
@@ -351,7 +346,7 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				Value constant = read_constant(vm);
 				ObjString *name = (ObjString *)AS_OBJ(constant);
 				Value value;
-				if (!get_global(vm, name, &value)) {
+				if (!table_get(&vm->globals, name, &value)) {
 					runtime_error(vm, "Undefined variable '%s'.", name->chars);
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
@@ -363,14 +358,16 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 			case OP_DEFINE_GLOBAL: {
 				Value constant = read_constant(vm);
 				ObjString *name = (ObjString *)AS_OBJ(constant);
-				Value value = pop(vm);
-				define_global(vm, name, value);
+				/* Peek before table_set so value stays rooted if table_set triggers GC. */
+				table_set(&vm->globals, name, peek(vm, 0));
+				pop(vm);
 				break;
 			}
 			case OP_SET_GLOBAL: {
 				Value constant = read_constant(vm);
 				ObjString *name = (ObjString *)AS_OBJ(constant);
-				if (!set_global(vm, name, peek(vm, 0))) {
+				if (table_set(&vm->globals, name, peek(vm, 0))) {
+					table_delete(&vm->globals, name);
 					runtime_error(vm, "Undefined variable '%s'.", name->chars);
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
@@ -408,11 +405,31 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				}
 				break;
 			}
-			case OP_ADD:
-				if (!binary_number_op(vm, '+')) {
+			case OP_ADD: {
+				if (is_string_value(peek(vm, 0)) && is_string_value(peek(vm, 1))) {
+					ObjString *b = (ObjString *)AS_OBJ(peek(vm, 0));
+					ObjString *a = (ObjString *)AS_OBJ(peek(vm, 1));
+					int len = a->length + b->length;
+					char *buf = (char *)malloc((size_t)len + 1);
+					if (buf == NULL) {
+						fprintf(stderr, "piko: out of memory\n");
+						exit(1);
+					}
+					memcpy(buf, a->chars, (size_t)a->length);
+					memcpy(buf + a->length, b->chars, (size_t)b->length);
+					buf[len] = '\0';
+					ObjString *result = obj_string_copy(buf, len);
+					free(buf);
+					pop(vm);
+					pop(vm);
+					if (!push(vm, OBJ_VAL(result))) {
+						return VM_INTERPRET_RUNTIME_ERROR;
+					}
+				} else if (!binary_number_op(vm, '+')) {
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
 				break;
+			}
 			case OP_SUBTRACT:
 				if (!binary_number_op(vm, '-')) {
 					return VM_INTERPRET_RUNTIME_ERROR;
@@ -457,6 +474,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 
 				ObjFunction *function = (ObjFunction *)AS_OBJ(function_val);
 				ObjClosure *closure = obj_closure_new(function, (int)capture_count);
+				if (!push(vm, OBJ_VAL(closure))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				CallFrame *frame = current_frame(vm);
 				for (int i = 0; i < (int)capture_count; i++) {
 					uint8_t is_local = read_byte(vm);
@@ -470,9 +490,6 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 						}
 						closure->captures[i] = frame->closure->captures[index];
 					}
-				}
-				if (!push(vm, OBJ_VAL(closure))) {
-					return VM_INTERPRET_RUNTIME_ERROR;
 				}
 				break;
 			}
@@ -548,25 +565,47 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				break;
 			}
 			case OP_GET_INDEX: {
-				Value index = pop(vm);
-				Value array = pop(vm);
-				if (!IS_OBJ(array)) {
-					runtime_error(vm, "Indexing supported only on arrays and maps.");
+				Value index = peek(vm, 0);
+				Value target = peek(vm, 1);
+				if (!IS_OBJ(target)) {
+					runtime_error(vm, "Indexing supported only on arrays, maps, and strings.");
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
-				switch (OBJ_TYPE(AS_OBJ(array))) {
+				switch (OBJ_TYPE(AS_OBJ(target))) {
 					case OBJ_ARRAY: {
 						if (!IS_NUMBER(index)) {
 							runtime_error(vm, "Index must be a number.");
 							return VM_INTERPRET_RUNTIME_ERROR;
 						}
-						ObjArray *a = (ObjArray *)AS_OBJ(array);
+						ObjArray *a = (ObjArray *)AS_OBJ(target);
 						int idx = (int)AS_NUMBER(index);
 						if (idx < 0 || idx >= a->count) {
 							runtime_error(vm, "Index out of bounds.");
 							return VM_INTERPRET_RUNTIME_ERROR;
 						}
-						if (!push(vm, a->items[idx])) {
+						Value elem = a->items[idx];
+						pop(vm);
+						pop(vm);
+						if (!push(vm, elem)) {
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						break;
+					}
+					case OBJ_STRING: {
+						if (!IS_NUMBER(index)) {
+							runtime_error(vm, "String index must be a number.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						ObjString *s = (ObjString *)AS_OBJ(target);
+						int idx = (int)AS_NUMBER(index);
+						if (idx < 0 || idx >= s->length) {
+							runtime_error(vm, "String index out of bounds.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						ObjString *ch = obj_string_copy(&s->chars[idx], 1);
+						pop(vm);
+						pop(vm);
+						if (!push(vm, OBJ_VAL(ch))) {
 							return VM_INTERPRET_RUNTIME_ERROR;
 						}
 						break;
@@ -576,23 +615,97 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 							runtime_error(vm, "Map keys must be strings.");
 							return VM_INTERPRET_RUNTIME_ERROR;
 						}
-						ObjMap *map = (ObjMap *)AS_OBJ(array);
+						ObjMap *map = (ObjMap *)AS_OBJ(target);
 						ObjString *key = (ObjString *)AS_OBJ(index);
-						Value value;
-						if (!obj_map_get(map, key->chars, key->length, &value)) {
-							if (!push(vm, NIL_VAL)) {
-								return VM_INTERPRET_RUNTIME_ERROR;
-							}
-						} else {
-							if (!push(vm, value)) {
-								return VM_INTERPRET_RUNTIME_ERROR;
-							}
+						Value value = NIL_VAL;
+						obj_map_get_key(map, key, &value);
+						pop(vm);
+						pop(vm);
+						if (!push(vm, value)) {
+							return VM_INTERPRET_RUNTIME_ERROR;
 						}
 						break;
 					}
 					default:
-						runtime_error(vm, "Indexing supported only on arrays and maps.");
+						runtime_error(vm, "Indexing supported only on arrays, maps, and strings.");
 						return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				break;
+			}
+			case OP_SET_INDEX: {
+				Value value = peek(vm, 0);
+				Value index = peek(vm, 1);
+				Value target = peek(vm, 2);
+				if (!IS_OBJ(target)) {
+					runtime_error(vm, "Index assignment supported only on arrays and maps.");
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				switch (OBJ_TYPE(AS_OBJ(target))) {
+					case OBJ_ARRAY: {
+						if (!IS_NUMBER(index)) {
+							runtime_error(vm, "Array index must be a number.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						ObjArray *a = (ObjArray *)AS_OBJ(target);
+						int idx = (int)AS_NUMBER(index);
+						if (idx < 0 || idx >= a->count) {
+							runtime_error(vm, "Array index out of bounds.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						a->items[idx] = value;
+						break;
+					}
+					case OBJ_MAP: {
+						if (!IS_OBJ(index) || OBJ_TYPE(AS_OBJ(index)) != OBJ_STRING) {
+							runtime_error(vm, "Map keys must be strings.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						ObjMap *map = (ObjMap *)AS_OBJ(target);
+						ObjString *key = (ObjString *)AS_OBJ(index);
+						obj_map_set_key(map, key, value);
+						break;
+					}
+					default:
+						runtime_error(vm, "Index assignment supported only on arrays and maps.");
+						return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				pop(vm);
+				pop(vm);
+				pop(vm);
+				if (!push(vm, value)) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				break;
+			}
+			case OP_BUILD_ARRAY: {
+				int count = (int)read_byte(vm);
+				/* Leave elements on the VM stack during allocation so GC roots them. */
+				ObjArray *arr = obj_array_new(vm->stack_top - count, count);
+				vm->stack_top -= count;
+				if (!push(vm, OBJ_VAL(arr))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				break;
+			}
+			case OP_BUILD_MAP: {
+				int pair_count = (int)read_byte(vm);
+				Value *base = vm->stack_top - (pair_count * 2);
+				ObjMap *map = obj_map_new();
+				vm_push_temp_root(vm, OBJ_VAL(map));
+				for (int i = 0; i < pair_count; i++) {
+					Value k = base[i * 2];
+					Value v = base[i * 2 + 1];
+					if (!IS_OBJ(k) || OBJ_TYPE(AS_OBJ(k)) != OBJ_STRING) {
+						vm_pop_temp_root(vm);
+						runtime_error(vm, "Map keys must be strings.");
+						return VM_INTERPRET_RUNTIME_ERROR;
+					}
+					obj_map_set_key(map, (ObjString *)AS_OBJ(k), v);
+				}
+				vm_pop_temp_root(vm);
+				vm->stack_top -= pair_count * 2;
+				if (!push(vm, OBJ_VAL(map))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
 				}
 				break;
 			}
@@ -602,7 +715,8 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				break;
 			case OP_RETURN: {
 				CallFrame *frame = current_frame(vm);
-				if (vm->frame_count == 1) {
+				if (vm->frame_count == 1 && stop_frame_count == 0) {
+					vm->frame_count = 0;
 					return VM_INTERPRET_OK;
 				}
 
@@ -611,13 +725,15 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 					result = pop(vm);
 				}
 
-				/* Close any upvalues that were capturing slots in this frame. */
 				close_upvalues(vm, frame->slots);
 
 				vm->frame_count--;
 				vm->stack_top = frame->slots;
 				if (!push(vm, result)) {
 					return VM_INTERPRET_RUNTIME_ERROR;
+				}
+				if (vm->frame_count == stop_frame_count) {
+					return VM_INTERPRET_OK;
 				}
 				break;
 			}
@@ -626,4 +742,18 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				return VM_INTERPRET_RUNTIME_ERROR;
 		}
 	}
+}
+
+InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
+	vm->frame_count = 1;
+	vm->frames[0].chunk = chunk;
+	vm->frames[0].ip = chunk->code;
+	vm->frames[0].slots = vm->stack;
+	vm->frames[0].closure = NULL;
+	vm->stack_top = vm->stack;
+
+	gc_set_enabled(true);
+	InterpretResult res = vm_run(vm, 0);
+	gc_set_enabled(false);
+	return res;
 }

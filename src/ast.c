@@ -32,20 +32,23 @@ Node *node_program(void) {
 	Node *n = node_new(NODE_PROGRAM, 1);
 	n->as.program.items = NULL;
 	n->as.program.count = 0;
+	n->as.program.capacity = 0;
 	return n;
 }
 
 void node_program_add(Node *program, Node *item) {
-	int old_count = program->as.program.count;
-	Node **grown = (Node **)realloc(program->as.program.items,
-									(size_t)(old_count + 1) * sizeof(Node *));
-	if (grown == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
+	if (program->as.program.count + 1 > program->as.program.capacity) {
+		int new_cap = program->as.program.capacity < 8 ? 8 : program->as.program.capacity * 2;
+		Node **grown = (Node **)realloc(program->as.program.items,
+										(size_t)new_cap * sizeof(Node *));
+		if (grown == NULL) {
+			fprintf(stderr, "piko: out of memory\n");
+			exit(1);
+		}
+		program->as.program.items = grown;
+		program->as.program.capacity = new_cap;
 	}
-	program->as.program.items = grown;
-	program->as.program.items[old_count] = item;
-	program->as.program.count = old_count + 1;
+	program->as.program.items[program->as.program.count++] = item;
 }
 
 void node_free(Node *node) {
@@ -97,6 +100,11 @@ void node_free(Node *node) {
 			node_free(node->as.for_stmt.increment);
 			node_free(node->as.for_stmt.body);
 			break;
+		case NODE_FOR_IN:
+			free(node->as.for_in_stmt.var_name);
+			node_free(node->as.for_in_stmt.iterable);
+			node_free(node->as.for_in_stmt.body);
+			break;
 		case NODE_STRING_LIT:
 			free(node->as.string_val.chars);
 			break;
@@ -146,6 +154,11 @@ void node_free(Node *node) {
 			free(node->as.assign.name);
 			node_free(node->as.assign.value);
 			break;
+		case NODE_INDEX_ASSIGN:
+			node_free(node->as.index_assign.target);
+			node_free(node->as.index_assign.index);
+			node_free(node->as.index_assign.value);
+			break;
 		case NODE_INT_LIT:
 		case NODE_FLOAT_LIT:
 		case NODE_BOOL_LIT:
@@ -168,6 +181,7 @@ const char *node_type_name(NodeType type) {
 		case NODE_IF: return "IF";
 		case NODE_WHILE: return "WHILE";
 		case NODE_FOR: return "FOR";
+		case NODE_FOR_IN: return "FOR_IN";
 		case NODE_INT_LIT: return "INT_LIT";
 		case NODE_FLOAT_LIT: return "FLOAT_LIT";
 		case NODE_BOOL_LIT: return "BOOL_LIT";
@@ -183,6 +197,7 @@ const char *node_type_name(NodeType type) {
 		case NODE_INDEX: return "INDEX";
 		case NODE_GROUPING: return "GROUPING";
 		case NODE_ASSIGN: return "ASSIGN";
+		case NODE_INDEX_ASSIGN: return "INDEX_ASSIGN";
 	}
 	return "UNKNOWN";
 }
@@ -281,6 +296,15 @@ void node_print(Node *node, int indent) {
 			printf("body:\n");
 			node_print(node->as.for_stmt.body, indent + 4);
 			break;
+		case NODE_FOR_IN:
+			printf(" var=%s\n", node->as.for_in_stmt.var_name);
+			print_indent(indent + 2);
+			printf("iterable:\n");
+			node_print(node->as.for_in_stmt.iterable, indent + 4);
+			print_indent(indent + 2);
+			printf("body:\n");
+			node_print(node->as.for_in_stmt.body, indent + 4);
+			break;
 		case NODE_INT_LIT:
 			printf(" value=%lld\n", (long long)node->as.int_val);
 			break;
@@ -361,6 +385,18 @@ void node_print(Node *node, int indent) {
 		case NODE_ASSIGN:
 			printf(" name=%s\n", node->as.assign.name);
 			node_print(node->as.assign.value, indent + 2);
+			break;
+		case NODE_INDEX_ASSIGN:
+			printf("\n");
+			print_indent(indent + 2);
+			printf("target:\n");
+			node_print(node->as.index_assign.target, indent + 4);
+			print_indent(indent + 2);
+			printf("index:\n");
+			node_print(node->as.index_assign.index, indent + 4);
+			print_indent(indent + 2);
+			printf("value:\n");
+			node_print(node->as.index_assign.value, indent + 4);
 			break;
 	}
 }

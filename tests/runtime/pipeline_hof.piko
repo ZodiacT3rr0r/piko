@@ -1,0 +1,42 @@
+fn double(x) { return x * 2; }
+fn gt4(x) { return x > 4; }
+fn sum_fn(acc, x) { return acc + x; }
+
+let nums = [1, 2, 3, 4, 5];
+let total = nums |> map(double) |> filter(gt4) |> reduce(sum_fn, 0);
+print(f"total={total}");
+
+// Dynamic collection literals & index mutation
+let base = 10;
+let dyn = [base + 1, base + 2, base + 3];
+dyn[1] = 99;
+print(dyn);
+
+let cfg = {"base": base, "next": base + 5};
+cfg["next"] = 42;
+cfg["added"] = "ok";
+print(cfg["base"]);
+print(cfg["next"]);
+print(cfg["added"]);
+
+// String concat + content-equal contains + for-in with closure capture
+let greeting = "hi" + " " + "piko";
+print(greeting);
+print(contains(["alpha", "beta"], "beta"));
+
+let fns = [];
+for x in [10, 20, 30] {
+    push(fns, fn() { return x; });
+}
+print(fns[0]() + fns[1]() + fns[2]());
+
+// Nested local recursive function
+fn outer() {
+    fn fact(n) {
+        if (n <= 1) { return 1; }
+        return n * fact(n - 1);
+    }
+    return fact(5);
+}
+print(outer());
+

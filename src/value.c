@@ -28,15 +28,7 @@ void value_array_write(ValueArray *array, Value value) {
 }
 
 void value_array_free(ValueArray *array) {
-	if (array->values != NULL) {
-		for (int i = 0; i < array->count; i++) {
-			if (IS_OBJ(array->values[i])) {
-				obj_free(AS_OBJ(array->values[i]));
-			}
-		}
-		free(array->values);
-	}
-
+	free(array->values);
 	value_array_init(array);
 }
 
@@ -55,4 +47,33 @@ void print_value(Value value) {
 			obj_print(AS_OBJ(value));
 			break;
 	}
+}
+
+bool values_equal(Value a, Value b) {
+	if (a.type != b.type) {
+		return false;
+	}
+
+	switch (a.type) {
+		case VAL_NIL:
+			return true;
+		case VAL_BOOL:
+			return AS_BOOL(a) == AS_BOOL(b);
+		case VAL_NUMBER:
+			return AS_NUMBER(a) == AS_NUMBER(b);
+		case VAL_OBJ:
+			if (AS_OBJ(a) == AS_OBJ(b)) {
+				return true;
+			}
+			if (OBJ_TYPE(AS_OBJ(a)) == OBJ_STRING && OBJ_TYPE(AS_OBJ(b)) == OBJ_STRING) {
+				ObjString *sa = (ObjString *)AS_OBJ(a);
+				ObjString *sb = (ObjString *)AS_OBJ(b);
+				return sa->length == sb->length &&
+					   sa->hash == sb->hash &&
+					   memcmp(sa->chars, sb->chars, (size_t)sa->length) == 0;
+			}
+			return false;
+	}
+
+	return false;
 }

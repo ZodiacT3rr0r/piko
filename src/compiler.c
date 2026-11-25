@@ -189,6 +189,10 @@ static void ensure_upvalue_capacity(Compiler *c) {
 }
 
 static void declare_local(Compiler *c, const char *name, int length) {
+	if (c->local_count >= 255) {
+		compile_error(c, 0, "Too many local variables in function.");
+		return;
+	}
 	ensure_local_capacity(c);
 	c->locals[c->local_count].name = name;
 	c->locals[c->local_count].length = length;
@@ -372,6 +376,15 @@ static void emit_closure(Compiler *c, ObjFunction *function, Compiler *inner, in
 }
 
 static void compile_function_decl_impl(Compiler *c, Node *node, bool as_statement) {
+	bool is_local_named = as_statement && c->scope_depth > 0 && strlen(node->as.fn_decl.name) > 0;
+	int local_slot = -1;
+	if (is_local_named) {
+		/* Pre-declare local slot so nested local functions can recursively capture themselves. */
+		emit_byte(c, OP_NIL, node->line);
+		declare_local(c, node->as.fn_decl.name, (int)strlen(node->as.fn_decl.name));
+		local_slot = c->local_count - 1;
+	}
+
 	ObjFunction *function = obj_function_new(node->as.fn_decl.name, node->as.fn_decl.param_count);
 	Compiler inner;
 	compiler_init(&inner, &function->chunk, true, c);
@@ -382,19 +395,17 @@ static void compile_function_decl_impl(Compiler *c, Node *node, bool as_statemen
 
 	compile_function_body(&inner, node->as.fn_decl.body);
 	if (inner.had_error) {
-		obj_free((Obj *)function);
 		compiler_free(&inner);
 		c->had_error = true;
 		return;
 	}
 
 	emit_closure(c, function, &inner, node->line);
-	if (as_statement && strlen(node->as.fn_decl.name) > 0) {
-		if (c->scope_depth > 0) {
-			declare_local(c, node->as.fn_decl.name, (int)strlen(node->as.fn_decl.name));
-		} else {
-			emit_global(c, OP_DEFINE_GLOBAL, node->as.fn_decl.name, node->line);
-		}
+	if (is_local_named) {
+		emit_local(c, OP_SET_LOCAL, local_slot, node->line);
+		emit_byte(c, OP_POP, node->line);
+	} else if (as_statement && strlen(node->as.fn_decl.name) > 0) {
+		emit_global(c, OP_DEFINE_GLOBAL, node->as.fn_decl.name, node->line);
 	}
 
 	compiler_free(&inner);
@@ -498,6 +509,58 @@ static void compile_for(Compiler *c, Node *node) {
 	end_scope(c, node->line);
 }
 
+static void compile_for_in(Compiler *c, Node *node) {
+	int line = node->line;
+	begin_scope(c);
+
+	/* Hidden local 1: $iter = iterable */
+	compile_expression(c, node->as.for_in_stmt.iterable);
+	declare_local(c, "$iter", 5);
+	int iter_slot = c->local_count - 1;
+
+	/* Hidden local 2: $idx = 0 */
+	emit_constant(c, NUMBER_VAL(0.0), line);
+	declare_local(c, "$idx", 4);
+	int idx_slot = c->local_count - 1;
+
+	/* Hidden local 3: $len = len($iter) */
+	emit_global(c, OP_GET_GLOBAL, "len", line);
+	emit_local(c, OP_GET_LOCAL, iter_slot, line);
+	emit_bytes(c, OP_CALL, 1, line);
+	declare_local(c, "$len", 4);
+	int len_slot = c->local_count - 1;
+
+	int loop_start = c->chunk->count;
+	emit_local(c, OP_GET_LOCAL, idx_slot, line);
+	emit_local(c, OP_GET_LOCAL, len_slot, line);
+	emit_byte(c, OP_LESS, line);
+
+	int exit_jump = emit_jump(c, OP_JUMP_IF_FALSE, line);
+	emit_byte(c, OP_POP, line);
+
+	/* Per-iteration scope so closures capturing loop var get a fresh binding each iteration. */
+	begin_scope(c);
+	emit_local(c, OP_GET_LOCAL, iter_slot, line);
+	emit_local(c, OP_GET_LOCAL, idx_slot, line);
+	emit_byte(c, OP_GET_INDEX, line);
+	declare_local(c, node->as.for_in_stmt.var_name, node->as.for_in_stmt.var_length);
+
+	compile_statement(c, node->as.for_in_stmt.body);
+	end_scope(c, line);
+
+	emit_local(c, OP_GET_LOCAL, idx_slot, line);
+	emit_constant(c, NUMBER_VAL(1.0), line);
+	emit_byte(c, OP_ADD, line);
+	emit_local(c, OP_SET_LOCAL, idx_slot, line);
+	emit_byte(c, OP_POP, line);
+
+	emit_loop(c, loop_start, line);
+	patch_jump(c, exit_jump, line);
+	emit_byte(c, OP_POP, line);
+
+	end_scope(c, line);
+}
+
 static void compile_block(Compiler *c, Node *node) {
 	begin_scope(c);
 	for (int i = 0; i < node->as.program.count; i++) {
@@ -511,93 +574,40 @@ static void compile_block(Compiler *c, Node *node) {
 
 static void compile_array(Compiler *c, Node *node) {
 	int count = node->as.array.count;
-	Value *vals = NULL;
-	if (count > 0) {
-		vals = (Value *)malloc(sizeof(Value) * (size_t)count);
-		if (vals == NULL) {
-			compile_error(c, node->line, "Out of memory building array literal.");
-			return;
-		}
+	if (count > 255) {
+		compile_error(c, node->line, "Too many elements in array literal.");
+		return;
 	}
-
 	for (int i = 0; i < count; i++) {
-		Node *elem = node->as.array.items[i];
-		switch (elem->type) {
-			case NODE_INT_LIT:
-				vals[i] = NUMBER_VAL((double)elem->as.int_val);
-				break;
-			case NODE_FLOAT_LIT:
-				vals[i] = NUMBER_VAL(elem->as.float_val);
-				break;
-			case NODE_STRING_LIT: {
-				ObjString *s = obj_string_copy(elem->as.string_val.chars, elem->as.string_val.length);
-				vals[i] = OBJ_VAL(s);
-				break;
-			}
-			case NODE_BOOL_LIT:
-				vals[i] = BOOL_VAL(elem->as.bool_val);
-				break;
-			case NODE_NIL_LIT:
-				vals[i] = NIL_VAL;
-				break;
-			default:
-				compile_error(c, elem->line, "Array element must be a literal in this stage.");
-				free(vals);
-				return;
-		}
+		compile_expression(c, node->as.array.items[i]);
 	}
-
-	ObjArray *arr = obj_array_new(vals, count);
-	free(vals);
-	emit_constant(c, OBJ_VAL(arr), node->line);
+	emit_bytes(c, OP_BUILD_ARRAY, (uint8_t)count, node->line);
 }
 
 static void compile_map(Compiler *c, Node *node) {
-	ObjMap *map = obj_map_new();
-	for (int i = 0; i < node->as.map.count; i++) {
-		Node *key = node->as.map.keys[i];
-		Node *value = node->as.map.values[i];
-		if (key->type != NODE_STRING_LIT) {
-			compile_error(c, key->line, "Map keys must be string literals in this stage.");
-			obj_free((Obj *)map);
-			return;
-		}
-
-		Value compiled_value = NIL_VAL;
-		switch (value->type) {
-			case NODE_INT_LIT:
-				compiled_value = NUMBER_VAL((double)value->as.int_val);
-				break;
-			case NODE_FLOAT_LIT:
-				compiled_value = NUMBER_VAL(value->as.float_val);
-				break;
-			case NODE_STRING_LIT: {
-				ObjString *s = obj_string_copy(value->as.string_val.chars, value->as.string_val.length);
-				compiled_value = OBJ_VAL(s);
-				break;
-			}
-			case NODE_BOOL_LIT:
-				compiled_value = BOOL_VAL(value->as.bool_val);
-				break;
-			case NODE_NIL_LIT:
-				compiled_value = NIL_VAL;
-				break;
-			default:
-				compile_error(c, value->line, "Map values must be literals in this stage.");
-				obj_free((Obj *)map);
-				return;
-		}
-
-		obj_map_set(map, key->as.string_val.chars, key->as.string_val.length, compiled_value);
+	int count = node->as.map.count;
+	if (count > 127) {
+		compile_error(c, node->line, "Too many entries in map literal.");
+		return;
 	}
-
-	emit_constant(c, OBJ_VAL(map), node->line);
+	for (int i = 0; i < count; i++) {
+		compile_expression(c, node->as.map.keys[i]);
+		compile_expression(c, node->as.map.values[i]);
+	}
+	emit_bytes(c, OP_BUILD_MAP, (uint8_t)count, node->line);
 }
 
 static void compile_index(Compiler *c, Node *node) {
 	compile_expression(c, node->as.index.left);
 	compile_expression(c, node->as.index.index);
 	emit_byte(c, OP_GET_INDEX, node->line);
+}
+
+static void compile_index_assign(Compiler *c, Node *node) {
+	compile_expression(c, node->as.index_assign.target);
+	compile_expression(c, node->as.index_assign.index);
+	compile_expression(c, node->as.index_assign.value);
+	emit_byte(c, OP_SET_INDEX, node->line);
 }
 
 static void compile_expression(Compiler *c, Node *node) {
@@ -669,6 +679,9 @@ static void compile_expression(Compiler *c, Node *node) {
 		case NODE_ASSIGN:
 			compile_assign(c, node);
 			break;
+		case NODE_INDEX_ASSIGN:
+			compile_index_assign(c, node);
+			break;
 		case NODE_FN_DECL:
 			compile_function_decl_impl(c, node, false);
 			break;
@@ -719,6 +732,9 @@ static void compile_statement(Compiler *c, Node *node) {
 			break;
 		case NODE_FOR:
 			compile_for(c, node);
+			break;
+		case NODE_FOR_IN:
+			compile_for_in(c, node);
 			break;
 		case NODE_BLOCK:
 			compile_block(c, node);

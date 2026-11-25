@@ -1,8 +1,11 @@
 == tests/compile/arrays.piko ==
-0000    1 OP_CONSTANT         0 '[1, 2, 3]'
-0002    1 OP_DEFINE_GLOBAL    1 'a'
-0004    2 OP_GET_GLOBAL       2 'a'
-0006    2 OP_CONSTANT         3 '1'
-0008    2 OP_GET_INDEX    
-0009    2 OP_PRINT        
-0010    1 OP_RETURN       
+0000    1 OP_CONSTANT         0 '1'
+0002    1 OP_CONSTANT         1 '2'
+0004    1 OP_CONSTANT         2 '3'
+0006    1 OP_BUILD_ARRAY      3
+0008    1 OP_DEFINE_GLOBAL    3 'a'
+0010    2 OP_GET_GLOBAL       4 'a'
+0012    2 OP_CONSTANT         5 '1'
+0014    2 OP_GET_INDEX    
+0015    2 OP_PRINT        
+0016    1 OP_RETURN       

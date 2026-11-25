@@ -7,10 +7,16 @@
 0010    3 OP_GET_GLOBAL       5 'y'
 0012    3 OP_ADD          
 0013    3 OP_PRINT        
-0014    4 OP_CONSTANT         6 'sum={x+y}'
-0016    4 OP_PRINT        
-0017    5 OP_GET_GLOBAL       7 'x'
-0019    5 OP_GET_GLOBAL       8 'y'
-0021    5 OP_ADD          
-0022    5 OP_POP          
-0023    1 OP_RETURN       
+0014    4 OP_CONSTANT         6 'sum='
+0016    4 OP_GET_GLOBAL       7 'str'
+0018    4 OP_GET_GLOBAL       8 'x'
+0020    4 OP_GET_GLOBAL       9 'y'
+0022    4 OP_ADD          
+0023    4 OP_CALL             1
+0025    4 OP_ADD          
+0026    4 OP_PRINT        
+0027    5 OP_GET_GLOBAL      10 'x'
+0029    5 OP_GET_GLOBAL      11 'y'
+0031    5 OP_ADD          
+0032    5 OP_POP          
+0033    1 OP_RETURN       

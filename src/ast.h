@@ -15,6 +15,7 @@ typedef enum {
 	NODE_IF,
 	NODE_WHILE,
 	NODE_FOR,
+	NODE_FOR_IN,
 
 	NODE_INT_LIT,
 	NODE_FLOAT_LIT,
@@ -31,6 +32,7 @@ typedef enum {
 	NODE_INDEX,
 	NODE_GROUPING,
 	NODE_ASSIGN,
+	NODE_INDEX_ASSIGN,
 } NodeType;
 
 typedef struct Node Node;
@@ -43,6 +45,7 @@ struct Node {
 		struct {
 			Node **items;
 			int count;
+			int capacity;
 		} program;
 
 		struct {
@@ -86,6 +89,13 @@ struct Node {
 			Node *increment;
 			Node *body;
 		} for_stmt;
+
+		struct {
+			char *var_name;
+			int var_length;
+			Node *iterable;
+			Node *body;
+		} for_in_stmt;
 
 		int64_t int_val;
 		double float_val;
@@ -149,6 +159,12 @@ struct Node {
 			int length;
 			Node *value;
 		} assign;
+
+		struct {
+			Node *target;
+			Node *index;
+			Node *value;
+		} index_assign;
 	} as;
 };
 

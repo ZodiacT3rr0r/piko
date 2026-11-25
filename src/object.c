@@ -1,78 +1,60 @@
 #include "object.h"
 
+#include "memory.h"
+
+static Obj *allocate_obj(size_t size, ObjType type) {
+	Obj *obj = (Obj *)piko_reallocate(NULL, 0, size);
+	obj->type = type;
+	gc_register_object(obj, size);
+	return obj;
+}
+
 ObjString *obj_string_copy(const char *chars, int length) {
-	ObjString *string = (ObjString *)malloc(sizeof(ObjString));
-	if (string == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
+	uint32_t hash = table_hash_string(chars, length);
+	ObjString *interned = gc_intern_find(chars, length, hash);
+	if (interned != NULL) {
+		return interned;
 	}
 
-	string->obj.type = OBJ_STRING;
+	ObjString *string = (ObjString *)allocate_obj(sizeof(ObjString), OBJ_STRING);
 	string->length = length;
-	string->chars = (char *)malloc((size_t)length + 1);
-	if (string->chars == NULL) {
-		free(string);
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
+	string->hash = hash;
+	string->chars = (char *)piko_reallocate(NULL, 0, (size_t)length + 1);
+	if (length > 0) {
+		memcpy(string->chars, chars, (size_t)length);
 	}
-
-	memcpy(string->chars, chars, (size_t)length);
 	string->chars[length] = '\0';
+
+	gc_intern_add(string);
 	return string;
 }
 
 ObjFunction *obj_function_new(const char *name, int arity) {
-	ObjFunction *function = (ObjFunction *)malloc(sizeof(ObjFunction));
-	if (function == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	function->obj.type = OBJ_FUNCTION;
-	function->name = (char *)malloc(strlen(name) + 1);
-	if (function->name == NULL) {
-		free(function);
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-	strcpy(function->name, name);
+	ObjFunction *function = (ObjFunction *)allocate_obj(sizeof(ObjFunction), OBJ_FUNCTION);
+	size_t name_len = strlen(name) + 1;
+	function->name = (char *)piko_reallocate(NULL, 0, name_len);
+	memcpy(function->name, name, name_len);
 	function->arity = arity;
 	chunk_init(&function->chunk);
 	return function;
 }
 
 ObjClosure *obj_closure_new(ObjFunction *function, int capture_count) {
-	ObjClosure *closure = (ObjClosure *)malloc(sizeof(ObjClosure));
-	if (closure == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	closure->obj.type = OBJ_CLOSURE;
+	ObjClosure *closure = (ObjClosure *)allocate_obj(sizeof(ObjClosure), OBJ_CLOSURE);
 	closure->function = function;
 	closure->capture_count = capture_count;
 	if (capture_count > 0) {
-		closure->captures = (struct ObjUpvalue **)calloc((size_t)capture_count, sizeof(struct ObjUpvalue *));
-		if (closure->captures == NULL) {
-			free(closure);
-			fprintf(stderr, "piko: out of memory\n");
-			exit(1);
-		}
+		size_t bytes = (size_t)capture_count * sizeof(struct ObjUpvalue *);
+		closure->captures = (struct ObjUpvalue **)piko_reallocate(NULL, 0, bytes);
+		memset(closure->captures, 0, bytes);
 	} else {
 		closure->captures = NULL;
 	}
-
 	return closure;
 }
 
-ObjNative *obj_native_new(const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result)) {
-	ObjNative *native = (ObjNative *)malloc(sizeof(ObjNative));
-	if (native == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	native->obj.type = OBJ_NATIVE;
+ObjNative *obj_native_new(const char *name, int arity, NativeFn function) {
+	ObjNative *native = (ObjNative *)allocate_obj(sizeof(ObjNative), OBJ_NATIVE);
 	native->name = name;
 	native->arity = arity;
 	native->function = function;
@@ -80,120 +62,101 @@ ObjNative *obj_native_new(const char *name, int arity, bool (*function)(int arg_
 }
 
 ObjArray *obj_array_new(Value *items, int count) {
-	ObjArray *arr = (ObjArray *)malloc(sizeof(ObjArray));
-	if (arr == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	arr->obj.type = OBJ_ARRAY;
+	ObjArray *arr = (ObjArray *)allocate_obj(sizeof(ObjArray), OBJ_ARRAY);
 	arr->count = count;
-	if (count > 0) {
-		arr->items = (Value *)malloc(sizeof(Value) * (size_t)count);
-		if (arr->items == NULL) {
-			free(arr);
-			fprintf(stderr, "piko: out of memory\n");
-			exit(1);
-		}
+	arr->capacity = count > 0 ? (count < 8 ? 8 : count) : 0;
+	if (arr->capacity > 0) {
+		arr->items = (Value *)piko_reallocate(NULL, 0, sizeof(Value) * (size_t)arr->capacity);
 		for (int i = 0; i < count; i++) {
 			arr->items[i] = items[i];
 		}
 	} else {
 		arr->items = NULL;
 	}
-
 	return arr;
 }
 
-ObjUpvalue *obj_upvalue_new(Value *location) {
-	ObjUpvalue *up = (ObjUpvalue *)malloc(sizeof(ObjUpvalue));
-	if (up == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
+void obj_array_push(ObjArray *array, Value value) {
+	if (array->count + 1 > array->capacity) {
+		int old_cap = array->capacity;
+		int new_cap = old_cap < 8 ? 8 : old_cap * 2;
+		array->items = (Value *)piko_reallocate(
+			array->items,
+			sizeof(Value) * (size_t)old_cap,
+			sizeof(Value) * (size_t)new_cap);
+		array->capacity = new_cap;
 	}
+	array->items[array->count++] = value;
+}
 
-	up->obj.type = OBJ_UPVALUE;
+ObjUpvalue *obj_upvalue_new(Value *location) {
+	ObjUpvalue *up = (ObjUpvalue *)allocate_obj(sizeof(ObjUpvalue), OBJ_UPVALUE);
 	up->location = location;
 	up->closed = NIL_VAL;
 	up->next = NULL;
 	return up;
 }
 
-static int map_find_entry(ObjMap *map, const char *key, int length) {
-	for (int i = 0; i < map->count; i++) {
-		ObjString *entry_key = map->entries[i].key;
-		if (entry_key->length == length && memcmp(entry_key->chars, key, (size_t)length) == 0) {
-			return i;
-		}
-	}
-	return -1;
-}
-
-static void ensure_map_capacity(ObjMap *map) {
-	if (map->count + 1 <= map->capacity) {
-		return;
-	}
-
-	int new_capacity = map->capacity < 8 ? 8 : map->capacity * 2;
-	void *memory = realloc(map->entries, sizeof(*map->entries) * (size_t)new_capacity);
-	if (memory == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	map->entries = memory;
-	map->capacity = new_capacity;
-}
-
 ObjMap *obj_map_new(void) {
-	ObjMap *map = (ObjMap *)malloc(sizeof(ObjMap));
-	if (map == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	map->obj.type = OBJ_MAP;
+	ObjMap *map = (ObjMap *)allocate_obj(sizeof(ObjMap), OBJ_MAP);
+	table_init(&map->table);
 	map->count = 0;
-	map->capacity = 0;
-	map->entries = NULL;
+	map->keys_order = NULL;
+	map->order_count = 0;
+	map->order_capacity = 0;
 	return map;
 }
 
-bool obj_map_set(ObjMap *map, const char *key, int length, Value value) {
-	int index = map_find_entry(map, key, length);
-	if (index >= 0) {
-		map->entries[index].value = value;
-		return true;
+static void map_append_order(ObjMap *map, ObjString *key) {
+	if (map->order_count + 1 > map->order_capacity) {
+		int old_cap = map->order_capacity;
+		int new_cap = old_cap < 8 ? 8 : old_cap * 2;
+		map->keys_order = (ObjString **)piko_reallocate(
+			map->keys_order,
+			sizeof(ObjString *) * (size_t)old_cap,
+			sizeof(ObjString *) * (size_t)new_cap);
+		map->order_capacity = new_cap;
 	}
+	map->keys_order[map->order_count++] = key;
+}
 
-	ensure_map_capacity(map);
-	ObjString *copy = obj_string_copy(key, length);
-	map->entries[map->count].key = copy;
-	map->entries[map->count].value = value;
-	map->count++;
+bool obj_map_set_key(ObjMap *map, ObjString *key, Value value) {
+	bool is_new = table_set(&map->table, key, value);
+	if (is_new) {
+		map->count++;
+		map_append_order(map, key);
+	}
 	return true;
+}
+
+bool obj_map_set(ObjMap *map, const char *key, int length, Value value) {
+	ObjString *key_obj = obj_string_copy(key, length);
+	return obj_map_set_key(map, key_obj, value);
+}
+
+bool obj_map_get_key(ObjMap *map, ObjString *key, Value *out_value) {
+	return table_get(&map->table, key, out_value);
 }
 
 bool obj_map_get(ObjMap *map, const char *key, int length, Value *out_value) {
-	int index = map_find_entry(map, key, length);
-	if (index < 0) {
-		return false;
-	}
-
-	*out_value = map->entries[index].value;
-	return true;
+	ObjString *key_obj = obj_string_copy(key, length);
+	return table_get(&map->table, key_obj, out_value);
 }
 
 bool obj_map_remove(ObjMap *map, const char *key, int length) {
-	int index = map_find_entry(map, key, length);
-	if (index < 0) {
+	ObjString *key_obj = obj_string_copy(key, length);
+	if (!table_delete(&map->table, key_obj)) {
 		return false;
 	}
-
-	free(map->entries[index].key->chars);
-	free(map->entries[index].key);
-	for (int i = index; i < map->count - 1; i++) {
-		map->entries[i] = map->entries[i + 1];
+	for (int i = 0; i < map->order_count; i++) {
+		ObjString *k = map->keys_order[i];
+		if (k == key_obj || (k->length == length && memcmp(k->chars, key, (size_t)length) == 0)) {
+			for (int j = i; j < map->order_count - 1; j++) {
+				map->keys_order[j] = map->keys_order[j + 1];
+			}
+			map->order_count--;
+			break;
+		}
 	}
 	map->count--;
 	return true;
@@ -219,12 +182,19 @@ void obj_print(Obj *obj) {
 		case OBJ_MAP: {
 			ObjMap *map = (ObjMap *)obj;
 			printf("{");
-			for (int i = 0; i < map->count; i++) {
-				printf("%s:", map->entries[i].key->chars);
-				print_value(map->entries[i].value);
-				if (i + 1 < map->count) {
+			int printed = 0;
+			for (int i = 0; i < map->order_count; i++) {
+				ObjString *key = map->keys_order[i];
+				Value val;
+				if (!table_get(&map->table, key, &val)) {
+					continue;
+				}
+				if (printed > 0) {
 					printf(", ");
 				}
+				printf("%s:", key->chars);
+				print_value(val);
+				printed++;
 			}
 			printf("}");
 			break;
@@ -238,16 +208,18 @@ void obj_print(Obj *obj) {
 			printf("<upvalue>");
 			break;
 		}
-			case OBJ_ARRAY: {
-				ObjArray *a = (ObjArray *)obj;
-				printf("[");
-				for (int i = 0; i < a->count; i++) {
-					print_value(a->items[i]);
-					if (i + 1 < a->count) printf(", ");
+		case OBJ_ARRAY: {
+			ObjArray *a = (ObjArray *)obj;
+			printf("[");
+			for (int i = 0; i < a->count; i++) {
+				print_value(a->items[i]);
+				if (i + 1 < a->count) {
+					printf(", ");
 				}
-				printf("]");
-				break;
 			}
+			printf("]");
+			break;
+		}
 	}
 }
 
@@ -255,56 +227,52 @@ void obj_free(Obj *obj) {
 	switch (obj->type) {
 		case OBJ_STRING: {
 			ObjString *string = (ObjString *)obj;
-			free(string->chars);
-			free(string);
+			piko_reallocate(string->chars, (size_t)string->length + 1, 0);
+			piko_reallocate(string, sizeof(ObjString), 0);
 			break;
 		}
 		case OBJ_FUNCTION: {
 			ObjFunction *function = (ObjFunction *)obj;
-			free(function->name);
+			size_t name_len = strlen(function->name) + 1;
+			piko_reallocate(function->name, name_len, 0);
 			chunk_free(&function->chunk);
-			free(function);
+			piko_reallocate(function, sizeof(ObjFunction), 0);
 			break;
 		}
 		case OBJ_CLOSURE: {
 			ObjClosure *closure = (ObjClosure *)obj;
-			free(closure->captures);
-			free(closure);
+			if (closure->captures != NULL) {
+				piko_reallocate(closure->captures,
+					(size_t)closure->capture_count * sizeof(struct ObjUpvalue *), 0);
+			}
+			piko_reallocate(closure, sizeof(ObjClosure), 0);
 			break;
 		}
 		case OBJ_UPVALUE: {
-			free(obj);
+			piko_reallocate(obj, sizeof(ObjUpvalue), 0);
 			break;
 		}
 		case OBJ_MAP: {
 			ObjMap *map = (ObjMap *)obj;
-			for (int i = 0; i < map->count; i++) {
-				free(map->entries[i].key->chars);
-				free(map->entries[i].key);
-				if (IS_OBJ(map->entries[i].value)) {
-					obj_free(AS_OBJ(map->entries[i].value));
-				}
+			table_free(&map->table);
+			if (map->keys_order != NULL) {
+				piko_reallocate(map->keys_order,
+					sizeof(ObjString *) * (size_t)map->order_capacity, 0);
 			}
-			free(map->entries);
-			free(map);
+			piko_reallocate(map, sizeof(ObjMap), 0);
 			break;
 		}
 		case OBJ_NATIVE: {
-			free(obj);
+			piko_reallocate(obj, sizeof(ObjNative), 0);
 			break;
 		}
-			case OBJ_ARRAY: {
-				ObjArray *a = (ObjArray *)obj;
-				if (a->items != NULL) {
-					for (int i = 0; i < a->count; i++) {
-						if (IS_OBJ(a->items[i])) {
-							obj_free(AS_OBJ(a->items[i]));
-						}
-					}
-					free(a->items);
-				}
-				free(a);
-				break;
+		case OBJ_ARRAY: {
+			ObjArray *a = (ObjArray *)obj;
+			if (a->items != NULL) {
+				piko_reallocate(a->items, sizeof(Value) * (size_t)a->capacity, 0);
 			}
+			piko_reallocate(a, sizeof(ObjArray), 0);
+			break;
+		}
 	}
 }

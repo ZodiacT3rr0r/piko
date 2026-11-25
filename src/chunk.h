@@ -34,6 +34,9 @@ typedef enum {
 	OP_LOOP,
 	OP_CALL,
 	OP_GET_INDEX,
+	OP_SET_INDEX,
+	OP_BUILD_ARRAY,
+	OP_BUILD_MAP,
 	OP_PRINT,
 	OP_RETURN,
 } OpCode;

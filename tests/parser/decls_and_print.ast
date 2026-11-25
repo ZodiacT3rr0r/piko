@@ -8,4 +8,12 @@ PROGRAM count=4
       IDENT name=x
       IDENT name=y
   PRINT_STMT
-    STRING_LIT value="sum={x+y}"
+    BINARY op=TOK_PLUS
+      STRING_LIT value="sum="
+      CALL
+        callee:
+          IDENT name=str
+        args=1
+          BINARY op=TOK_PLUS
+            IDENT name=x
+            IDENT name=y

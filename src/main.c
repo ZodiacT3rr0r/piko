@@ -1,9 +1,12 @@
 #include "common.h"
 #include "lexer.h"
+#include "memory.h"
 #include "parser.h"
 #include "compiler.h"
 #include "vm.h"
 #include "builtins.h"
+
+#include <ctype.h>
 
 static char *read_file_bytes(const char *path, size_t *out_size) {
     FILE *file = fopen(path, "rb");
@@ -45,19 +48,70 @@ static char *read_file_bytes(const char *path, size_t *out_size) {
 
 static void run_repl(void) {
     char line[4096];
-    printf("Piko dev build\n");
-    printf("Type 'exit' to quit.\n");
+    char wrapped[4128];
+
+    VM vm;
+    vm_init(&vm);
+    builtins_install(&vm);
+
+    printf("Piko REPL (C11 bytecode VM)\n");
+    printf("Type 'exit' or Ctrl+D to quit.\n");
 
     for (;;) {
         printf(">> ");
+        fflush(stdout);
         if (!fgets(line, sizeof(line), stdin)) {
+            printf("\n");
             break;
         }
-        if (strcmp(line, "exit\n") == 0 || strcmp(line, "exit") == 0) {
+
+        size_t len = strlen(line);
+        while (len > 0 && isspace((unsigned char)line[len - 1])) {
+            line[--len] = '\0';
+        }
+        if (len == 0) {
+            continue;
+        }
+        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) {
             break;
         }
-        printf("[stub] %s", line);
+
+        /* Auto-append ';' for single-line interactive expressions/statements. */
+        const char *source = line;
+        if (line[len - 1] != ';' && line[len - 1] != '}') {
+            snprintf(wrapped, sizeof(wrapped), "%s;", line);
+            source = wrapped;
+        }
+
+        bool had_parse_error = false;
+        Node *program = parse_source(source, &had_parse_error);
+        if (had_parse_error) {
+            node_free(program);
+            continue;
+        }
+
+        /* In interactive mode, if the user typed a single expression statement, print its value. */
+        if (program->type == NODE_PROGRAM &&
+            program->as.program.count == 1 &&
+            program->as.program.items[0]->type == NODE_EXPR_STMT) {
+            Node *stmt = program->as.program.items[0];
+            Node *expr = stmt->as.expr_stmt.expr;
+            stmt->type = NODE_PRINT_STMT;
+            stmt->as.print_stmt.expr = expr;
+        }
+
+        Chunk chunk;
+        gc_set_enabled(false);
+        bool compile_ok = compile_program(program, &chunk);
+        if (compile_ok) {
+            vm_interpret(&vm, &chunk);
+        }
+
+        chunk_free(&chunk);
+        node_free(program);
     }
+
+    vm_free(&vm);
 }
 
 static int run_file(const char *path) {
@@ -75,21 +129,24 @@ static int run_file(const char *path) {
         return 1;
     }
 
+    VM vm;
+    vm_init(&vm);
+    gc_set_enabled(false);
+
     Chunk chunk;
     bool compile_ok = compile_program(program, &chunk);
     if (!compile_ok) {
         chunk_free(&chunk);
+        vm_free(&vm);
         node_free(program);
         free(buffer);
         return 1;
     }
 
-    VM vm;
-    vm_init(&vm);
     builtins_install(&vm);
     InterpretResult result = vm_interpret(&vm, &chunk);
-    vm_free(&vm);
 
+    vm_free(&vm);
     chunk_free(&chunk);
     node_free(program);
     (void)read;
@@ -144,6 +201,7 @@ static int run_compile_file(const char *path) {
     }
 
     chunk_free(&chunk);
+    gc_free_all();
     node_free(program);
     free(source);
     return ok ? 0 : 1;

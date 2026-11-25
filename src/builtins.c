@@ -5,7 +5,12 @@
 
 #include "object.h"
 
-static bool builtin_len(int arg_count, Value *args, Value *out_result) {
+static bool is_truthy(Value value) {
+	return !(IS_NIL(value) || (IS_BOOL(value) && !AS_BOOL(value)));
+}
+
+static bool builtin_len(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 1) {
 		fprintf(stderr, "len expects 1 argument.\n");
 		return false;
@@ -38,7 +43,8 @@ static bool builtin_len(int arg_count, Value *args, Value *out_result) {
 	}
 }
 
-static bool builtin_push(int arg_count, Value *args, Value *out_result) {
+static bool builtin_push(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 2) {
 		fprintf(stderr, "push expects 2 arguments.\n");
 		return false;
@@ -50,21 +56,13 @@ static bool builtin_push(int arg_count, Value *args, Value *out_result) {
 	}
 
 	ObjArray *array = (ObjArray *)AS_OBJ(args[0]);
-	int new_count = array->count + 1;
-	Value *grown = (Value *)realloc(array->items, sizeof(Value) * (size_t)new_count);
-	if (grown == NULL) {
-		fprintf(stderr, "piko: out of memory\n");
-		exit(1);
-	}
-
-	array->items = grown;
-	array->items[array->count] = args[1];
-	array->count = new_count;
+	obj_array_push(array, args[1]);
 	*out_result = args[0];
 	return true;
 }
 
-static bool builtin_pop(int arg_count, Value *args, Value *out_result) {
+static bool builtin_pop(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 1) {
 		fprintf(stderr, "pop expects 1 argument.\n");
 		return false;
@@ -86,7 +84,8 @@ static bool builtin_pop(int arg_count, Value *args, Value *out_result) {
 	return true;
 }
 
-static bool builtin_type(int arg_count, Value *args, Value *out_result) {
+static bool builtin_type(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 1) {
 		fprintf(stderr, "type expects 1 argument.\n");
 		return false;
@@ -115,7 +114,8 @@ static bool builtin_type(int arg_count, Value *args, Value *out_result) {
 	return true;
 }
 
-static bool builtin_str(int arg_count, Value *args, Value *out_result) {
+static bool builtin_str(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 1) {
 		fprintf(stderr, "str expects 1 argument.\n");
 		return false;
@@ -133,8 +133,8 @@ static bool builtin_str(int arg_count, Value *args, Value *out_result) {
 	} else if (IS_OBJ(args[0])) {
 		switch (OBJ_TYPE(AS_OBJ(args[0]))) {
 			case OBJ_STRING:
-				text = ((ObjString *)AS_OBJ(args[0]))->chars;
-				break;
+				*out_result = args[0];
+				return true;
 			default:
 				text = "<object>";
 				break;
@@ -147,7 +147,8 @@ static bool builtin_str(int arg_count, Value *args, Value *out_result) {
 	return true;
 }
 
-static bool builtin_int(int arg_count, Value *args, Value *out_result) {
+static bool builtin_int(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 1) {
 		fprintf(stderr, "int expects 1 argument.\n");
 		return false;
@@ -167,7 +168,8 @@ static bool builtin_int(int arg_count, Value *args, Value *out_result) {
 	return false;
 }
 
-static bool builtin_float(int arg_count, Value *args, Value *out_result) {
+static bool builtin_float(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 1) {
 		fprintf(stderr, "float expects 1 argument.\n");
 		return false;
@@ -187,7 +189,8 @@ static bool builtin_float(int arg_count, Value *args, Value *out_result) {
 	return false;
 }
 
-static bool builtin_clock(int arg_count, Value *args, Value *out_result) {
+static bool builtin_clock(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	(void)args;
 	if (arg_count != 0) {
 		fprintf(stderr, "clock expects 0 arguments.\n");
@@ -198,7 +201,8 @@ static bool builtin_clock(int arg_count, Value *args, Value *out_result) {
 	return true;
 }
 
-static bool builtin_contains(int arg_count, Value *args, Value *out_result) {
+static bool builtin_contains(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 2) {
 		fprintf(stderr, "contains expects 2 arguments.\n");
 		return false;
@@ -223,23 +227,9 @@ static bool builtin_contains(int arg_count, Value *args, Value *out_result) {
 		case OBJ_ARRAY: {
 			ObjArray *array = (ObjArray *)AS_OBJ(args[0]);
 			for (int i = 0; i < array->count; i++) {
-				if (array->items[i].type == args[1].type) {
-					if (array->items[i].type == VAL_NUMBER && AS_NUMBER(array->items[i]) == AS_NUMBER(args[1])) {
-						*out_result = BOOL_VAL(true);
-						return true;
-					}
-					if (array->items[i].type == VAL_BOOL && AS_BOOL(array->items[i]) == AS_BOOL(args[1])) {
-						*out_result = BOOL_VAL(true);
-						return true;
-					}
-					if (array->items[i].type == VAL_NIL && IS_NIL(args[1])) {
-						*out_result = BOOL_VAL(true);
-						return true;
-					}
-					if (array->items[i].type == VAL_OBJ && args[1].type == VAL_OBJ && AS_OBJ(array->items[i]) == AS_OBJ(args[1])) {
-						*out_result = BOOL_VAL(true);
-						return true;
-					}
+				if (values_equal(array->items[i], args[1])) {
+					*out_result = BOOL_VAL(true);
+					return true;
 				}
 			}
 			*out_result = BOOL_VAL(false);
@@ -253,7 +243,7 @@ static bool builtin_contains(int arg_count, Value *args, Value *out_result) {
 			ObjMap *map = (ObjMap *)AS_OBJ(args[0]);
 			ObjString *key = (ObjString *)AS_OBJ(args[1]);
 			Value unused;
-			*out_result = BOOL_VAL(obj_map_get(map, key->chars, key->length, &unused));
+			*out_result = BOOL_VAL(obj_map_get_key(map, key, &unused));
 			return true;
 		}
 		default:
@@ -262,57 +252,51 @@ static bool builtin_contains(int arg_count, Value *args, Value *out_result) {
 	}
 }
 
-static bool builtin_keys(int arg_count, Value *args, Value *out_result) {
+static bool builtin_keys(VM *vm, int arg_count, Value *args, Value *out_result) {
 	if (arg_count != 1 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_MAP) {
 		fprintf(stderr, "keys expects 1 map argument.\n");
 		return false;
 	}
 
 	ObjMap *map = (ObjMap *)AS_OBJ(args[0]);
-	Value *items = NULL;
-	if (map->count > 0) {
-		items = (Value *)malloc(sizeof(Value) * (size_t)map->count);
-		if (items == NULL) {
-			fprintf(stderr, "piko: out of memory\n");
-			exit(1);
-		}
-		for (int i = 0; i < map->count; i++) {
-			ObjString *copy = obj_string_copy(map->entries[i].key->chars, map->entries[i].key->length);
-			items[i] = OBJ_VAL(copy);
+	ObjArray *arr = obj_array_new(NULL, 0);
+	vm_push_temp_root(vm, OBJ_VAL(arr));
+	for (int i = 0; i < map->order_count; i++) {
+		ObjString *key = map->keys_order[i];
+		Value unused;
+		if (table_get(&map->table, key, &unused)) {
+			obj_array_push(arr, OBJ_VAL(key));
 		}
 	}
-
-	*out_result = OBJ_VAL(obj_array_new(items, map->count));
-	free(items);
+	vm_pop_temp_root(vm);
+	*out_result = OBJ_VAL(arr);
 	return true;
 }
 
-static bool builtin_values(int arg_count, Value *args, Value *out_result) {
+static bool builtin_values(VM *vm, int arg_count, Value *args, Value *out_result) {
 	if (arg_count != 1 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_MAP) {
 		fprintf(stderr, "values expects 1 map argument.\n");
 		return false;
 	}
 
 	ObjMap *map = (ObjMap *)AS_OBJ(args[0]);
-	Value *items = NULL;
-	if (map->count > 0) {
-		items = (Value *)malloc(sizeof(Value) * (size_t)map->count);
-		if (items == NULL) {
-			fprintf(stderr, "piko: out of memory\n");
-			exit(1);
-		}
-		for (int i = 0; i < map->count; i++) {
-			items[i] = map->entries[i].value;
+	ObjArray *arr = obj_array_new(NULL, 0);
+	vm_push_temp_root(vm, OBJ_VAL(arr));
+	for (int i = 0; i < map->order_count; i++) {
+		ObjString *key = map->keys_order[i];
+		Value val;
+		if (table_get(&map->table, key, &val)) {
+			obj_array_push(arr, val);
 		}
 	}
-
-	*out_result = OBJ_VAL(obj_array_new(items, map->count));
-	free(items);
+	vm_pop_temp_root(vm);
+	*out_result = OBJ_VAL(arr);
 	return true;
 }
 
-static bool builtin_split(int arg_count, Value *args, Value *out_result) {
-	if (arg_count != 2 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_STRING || !IS_OBJ(args[1]) || OBJ_TYPE(AS_OBJ(args[1])) != OBJ_STRING) {
+static bool builtin_split(VM *vm, int arg_count, Value *args, Value *out_result) {
+	if (arg_count != 2 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_STRING ||
+		!IS_OBJ(args[1]) || OBJ_TYPE(AS_OBJ(args[1])) != OBJ_STRING) {
 		fprintf(stderr, "split expects (string, string).\n");
 		return false;
 	}
@@ -324,43 +308,29 @@ static bool builtin_split(int arg_count, Value *args, Value *out_result) {
 		return false;
 	}
 
-	int count = 0;
-	int capacity = 0;
-	Value *items = NULL;
+	ObjArray *arr = obj_array_new(NULL, 0);
+	vm_push_temp_root(vm, OBJ_VAL(arr));
 	const char *cursor = text->chars;
 	const char *match = strstr(cursor, delim->chars);
 	while (match != NULL) {
 		int len = (int)(match - cursor);
-		if (count + 1 > capacity) {
-			capacity = capacity < 4 ? 4 : capacity * 2;
-			items = (Value *)realloc(items, sizeof(Value) * (size_t)capacity);
-			if (items == NULL) {
-				fprintf(stderr, "piko: out of memory\n");
-				exit(1);
-			}
-		}
-		items[count++] = OBJ_VAL(obj_string_copy(cursor, len));
+		ObjString *piece = obj_string_copy(cursor, len);
+		obj_array_push(arr, OBJ_VAL(piece));
 		cursor = match + delim->length;
 		match = strstr(cursor, delim->chars);
 	}
+	ObjString *tail = obj_string_copy(cursor, (int)strlen(cursor));
+	obj_array_push(arr, OBJ_VAL(tail));
+	vm_pop_temp_root(vm);
 
-	if (count + 1 > capacity) {
-		capacity = capacity < 4 ? 4 : capacity * 2;
-		items = (Value *)realloc(items, sizeof(Value) * (size_t)capacity);
-		if (items == NULL) {
-			fprintf(stderr, "piko: out of memory\n");
-			exit(1);
-		}
-	}
-	items[count++] = OBJ_VAL(obj_string_copy(cursor, (int)strlen(cursor)));
-
-	*out_result = OBJ_VAL(obj_array_new(items, count));
-	free(items);
+	*out_result = OBJ_VAL(arr);
 	return true;
 }
 
-static bool builtin_join(int arg_count, Value *args, Value *out_result) {
-	if (arg_count != 2 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_ARRAY || !IS_OBJ(args[1]) || OBJ_TYPE(AS_OBJ(args[1])) != OBJ_STRING) {
+static bool builtin_join(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
+	if (arg_count != 2 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_ARRAY ||
+		!IS_OBJ(args[1]) || OBJ_TYPE(AS_OBJ(args[1])) != OBJ_STRING) {
 		fprintf(stderr, "join expects (array, string).\n");
 		return false;
 	}
@@ -397,7 +367,8 @@ static bool builtin_join(int arg_count, Value *args, Value *out_result) {
 	return true;
 }
 
-static bool builtin_trim(int arg_count, Value *args, Value *out_result) {
+static bool builtin_trim(VM *vm, int arg_count, Value *args, Value *out_result) {
+	(void)vm;
 	if (arg_count != 1 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_STRING) {
 		fprintf(stderr, "trim expects 1 string argument.\n");
 		return false;
@@ -417,7 +388,7 @@ static bool builtin_trim(int arg_count, Value *args, Value *out_result) {
 	return true;
 }
 
-static bool builtin_range(int arg_count, Value *args, Value *out_result) {
+static bool builtin_range(VM *vm, int arg_count, Value *args, Value *out_result) {
 	if (arg_count != 1 || !IS_NUMBER(args[0])) {
 		fprintf(stderr, "range expects 1 numeric argument.\n");
 		return false;
@@ -429,20 +400,94 @@ static bool builtin_range(int arg_count, Value *args, Value *out_result) {
 		return false;
 	}
 
-	Value *items = NULL;
-	if (end > 0) {
-		items = (Value *)malloc(sizeof(Value) * (size_t)end);
-		if (items == NULL) {
-			fprintf(stderr, "piko: out of memory\n");
-			exit(1);
+	ObjArray *arr = obj_array_new(NULL, 0);
+	vm_push_temp_root(vm, OBJ_VAL(arr));
+	for (int i = 0; i < end; i++) {
+		obj_array_push(arr, NUMBER_VAL((double)i));
+	}
+	vm_pop_temp_root(vm);
+	*out_result = OBJ_VAL(arr);
+	return true;
+}
+
+static bool builtin_map(VM *vm, int arg_count, Value *args, Value *out_result) {
+	if (arg_count != 2 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_ARRAY) {
+		fprintf(stderr, "map expects (array, function).\n");
+		return false;
+	}
+
+	ObjArray *src = (ObjArray *)AS_OBJ(args[0]);
+	Value fn = args[1];
+	ObjArray *dst = obj_array_new(NULL, 0);
+	vm_push_temp_root(vm, OBJ_VAL(dst));
+
+	for (int i = 0; i < src->count; i++) {
+		Value mapped = NIL_VAL;
+		Value call_args[1] = {src->items[i]};
+		if (!vm_call_value(vm, fn, 1, call_args, &mapped)) {
+			vm_pop_temp_root(vm);
+			return false;
 		}
-		for (int i = 0; i < end; i++) {
-			items[i] = NUMBER_VAL((double)i);
+		obj_array_push(dst, mapped);
+	}
+
+	vm_pop_temp_root(vm);
+	*out_result = OBJ_VAL(dst);
+	return true;
+}
+
+static bool builtin_filter(VM *vm, int arg_count, Value *args, Value *out_result) {
+	if (arg_count != 2 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_ARRAY) {
+		fprintf(stderr, "filter expects (array, function).\n");
+		return false;
+	}
+
+	ObjArray *src = (ObjArray *)AS_OBJ(args[0]);
+	Value fn = args[1];
+	ObjArray *dst = obj_array_new(NULL, 0);
+	vm_push_temp_root(vm, OBJ_VAL(dst));
+
+	for (int i = 0; i < src->count; i++) {
+		Value keep = NIL_VAL;
+		Value call_args[1] = {src->items[i]};
+		if (!vm_call_value(vm, fn, 1, call_args, &keep)) {
+			vm_pop_temp_root(vm);
+			return false;
+		}
+		if (is_truthy(keep)) {
+			obj_array_push(dst, src->items[i]);
 		}
 	}
 
-	*out_result = OBJ_VAL(obj_array_new(items, end));
-	free(items);
+	vm_pop_temp_root(vm);
+	*out_result = OBJ_VAL(dst);
+	return true;
+}
+
+static bool builtin_reduce(VM *vm, int arg_count, Value *args, Value *out_result) {
+	if (arg_count != 3 || !IS_OBJ(args[0]) || OBJ_TYPE(AS_OBJ(args[0])) != OBJ_ARRAY) {
+		fprintf(stderr, "reduce expects (array, function, initial).\n");
+		return false;
+	}
+
+	ObjArray *src = (ObjArray *)AS_OBJ(args[0]);
+	Value fn = args[1];
+	Value acc = args[2];
+	vm_push_temp_root(vm, acc);
+
+	for (int i = 0; i < src->count; i++) {
+		Value next = NIL_VAL;
+		Value call_args[2] = {acc, src->items[i]};
+		if (!vm_call_value(vm, fn, 2, call_args, &next)) {
+			vm_pop_temp_root(vm);
+			return false;
+		}
+		acc = next;
+		vm->temp_roots[vm->temp_root_count - 1] = acc;
+	}
+
+	vm_pop_temp_root(vm);
+	*out_result = acc;
 	return true;
 }
 
@@ -462,4 +507,7 @@ void builtins_install(VM *vm) {
 	vm_define_native(vm, "join", 2, builtin_join);
 	vm_define_native(vm, "trim", 1, builtin_trim);
 	vm_define_native(vm, "range", 1, builtin_range);
+	vm_define_native(vm, "map", 2, builtin_map);
+	vm_define_native(vm, "filter", 2, builtin_filter);
+	vm_define_native(vm, "reduce", 3, builtin_reduce);
 }

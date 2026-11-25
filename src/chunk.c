@@ -146,6 +146,14 @@ int disassemble_instruction(const Chunk *chunk, int offset) {
 			return offset + 2;
 		case OP_GET_INDEX:
 			return simple_instruction("OP_GET_INDEX", offset);
+		case OP_SET_INDEX:
+			return simple_instruction("OP_SET_INDEX", offset);
+		case OP_BUILD_ARRAY:
+			printf("%-16s %4d\n", "OP_BUILD_ARRAY", chunk->code[offset + 1]);
+			return offset + 2;
+		case OP_BUILD_MAP:
+			printf("%-16s %4d\n", "OP_BUILD_MAP", chunk->code[offset + 1]);
+			return offset + 2;
 		case OP_PRINT:
 			return simple_instruction("OP_PRINT", offset);
 		case OP_RETURN:

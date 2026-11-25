@@ -1,0 +1,24 @@
+// Allocate many temporary strings, arrays, maps, and closures to trigger GC cycles.
+fn make_acc(seed) {
+    let total = seed;
+    return fn(v) {
+        total = total + v;
+        return total;
+    };
+}
+
+let acc = make_acc(100);
+let live = {"tag": "keep"};
+
+for (let i = 0; i < 600; i = i + 1) {
+    let temp_str = "item_" + str(i) + "_garbage_payload_for_gc_pressure";
+    let temp_arr = [i, i + 1, temp_str];
+    let temp_map = {"k": temp_str, "n": i};
+    if (i % 100 == 0) {
+        acc(1);
+    }
+}
+
+print(acc(0));
+print(live["tag"]);
+

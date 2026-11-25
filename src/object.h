@@ -3,7 +3,10 @@
 
 #include "common.h"
 #include "chunk.h"
+#include "table.h"
 #include "value.h"
+
+typedef struct VM VM;
 
 typedef enum {
 	OBJ_STRING,
@@ -15,15 +18,18 @@ typedef enum {
 	OBJ_ARRAY,
 } ObjType;
 
-typedef struct Obj {
+struct Obj {
 	ObjType type;
-} Obj;
+	bool is_marked;
+	struct Obj *next;
+};
 
-typedef struct {
+struct ObjString {
 	Obj obj;
 	int length;
+	uint32_t hash;
 	char *chars;
-} ObjString;
+};
 
 typedef struct {
 	Obj obj;
@@ -47,27 +53,27 @@ typedef struct ObjUpvalue {
 } ObjUpvalue;
 
 typedef struct {
-	ObjString *key;
-	Value value;
-} ObjMapEntry;
-
-typedef struct {
 	Obj obj;
+	Table table;
 	int count;
-	int capacity;
-	ObjMapEntry *entries;
+	ObjString **keys_order;
+	int order_count;
+	int order_capacity;
 } ObjMap;
+
+typedef bool (*NativeFn)(VM *vm, int arg_count, Value *args, Value *out_result);
 
 typedef struct {
 	Obj obj;
 	const char *name;
 	int arity;
-	bool (*function)(int arg_count, Value *args, Value *out_result);
+	NativeFn function;
 } ObjNative;
 
 typedef struct {
 	Obj obj;
 	int count;
+	int capacity;
 	Value *items;
 } ObjArray;
 
@@ -79,10 +85,13 @@ ObjClosure *obj_closure_new(ObjFunction *function, int capture_count);
 ObjUpvalue *obj_upvalue_new(Value *location);
 ObjMap *obj_map_new(void);
 bool obj_map_set(ObjMap *map, const char *key, int length, Value value);
+bool obj_map_set_key(ObjMap *map, ObjString *key, Value value);
 bool obj_map_get(ObjMap *map, const char *key, int length, Value *out_value);
+bool obj_map_get_key(ObjMap *map, ObjString *key, Value *out_value);
 bool obj_map_remove(ObjMap *map, const char *key, int length);
-ObjNative *obj_native_new(const char *name, int arity, bool (*function)(int arg_count, Value *args, Value *out_result));
+ObjNative *obj_native_new(const char *name, int arity, NativeFn function);
 ObjArray *obj_array_new(Value *items, int count);
+void obj_array_push(ObjArray *array, Value value);
 void obj_print(Obj *obj);
 void obj_free(Obj *obj);
 
