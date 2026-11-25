@@ -11,12 +11,18 @@ static Node *parse_declaration(Parser *p);
 static Node *parse_statement(Parser *p);
 static Node *parse_let_declaration(Parser *p);
 static Node *parse_fn_declaration(Parser *p);
+static Node *parse_if_statement(Parser *p);
+static Node *parse_while_statement(Parser *p);
+static Node *parse_for_statement(Parser *p);
+static Node *parse_block_statement(Parser *p);
 static Node *parse_print_statement(Parser *p);
 static Node *parse_return_statement(Parser *p);
 static Node *parse_expression_statement(Parser *p);
 
 static Node *parse_expression(Parser *p);
 static Node *parse_assignment(Parser *p);
+static Node *parse_logic_or(Parser *p);
+static Node *parse_logic_and(Parser *p);
 static Node *parse_equality(Parser *p);
 static Node *parse_comparison(Parser *p);
 static Node *parse_term(Parser *p);
@@ -180,6 +186,14 @@ static Node *new_binary(Node *left, TokenType op, Node *right, int line) {
 	n->as.binary.left = left;
 	n->as.binary.op = op;
 	n->as.binary.right = right;
+	return n;
+}
+
+static Node *new_logical(Node *left, TokenType op, Node *right, int line) {
+	Node *n = node_new(NODE_LOGICAL, line);
+	n->as.logical.left = left;
+	n->as.logical.op = op;
+	n->as.logical.right = right;
 	return n;
 }
 
@@ -353,6 +367,25 @@ static Node *parse_block_program(Parser *p) {
 	return block;
 }
 
+static Node *parse_block_statement(Parser *p) {
+	int line = p->previous.line;
+	Node *block = node_new(NODE_BLOCK, line);
+	block->as.program.items = NULL;
+	block->as.program.count = 0;
+
+	while (!parser_check(p, TOK_RBRACE) && !parser_check(p, TOK_EOF)) {
+		Node *decl = parse_declaration(p);
+		node_program_add(block, decl);
+
+		if (p->panic_mode) {
+			parser_synchronize(p);
+		}
+	}
+
+	parser_consume(p, TOK_RBRACE, "Expect '}' after block.");
+	return block;
+}
+
 static Node *parse_fn_declaration(Parser *p) {
 	parser_consume(p, TOK_IDENT, "Expect function name after 'fn'.");
 	Token name = p->previous;
@@ -403,52 +436,43 @@ static Node *parse_call(Parser *p) {
 	Node *expr = parse_primary(p);
 
 	for (;;) {
-		/* handle function call */
-		if (!parser_match(p, TOK_LPAREN)) {
-			break;
-		}
+		if (parser_match(p, TOK_LPAREN)) {
+			int line = p->previous.line;
+			int arg_count = 0;
+			Node **args = NULL;
+			if (!parser_check(p, TOK_RPAREN)) {
+				int capacity = 0;
+				for (;;) {
+					if (arg_count + 1 > capacity) {
+						capacity = capacity < 4 ? 4 : capacity * 2;
+						args = (Node **)realloc(args, sizeof(Node *) * (size_t)capacity);
+						if (args == NULL) {
+							fprintf(stderr, "piko: out of memory\n");
+							exit(1);
+						}
+					}
 
-		int line = p->previous.line;
-
-		int arg_count = 0;
-		Node **args = NULL;
-		if (!parser_check(p, TOK_RPAREN)) {
-			int capacity = 0;
-			for (;;) {
-				if (arg_count + 1 > capacity) {
-					capacity = capacity < 4 ? 4 : capacity * 2;
-					args = (Node **)realloc(args, sizeof(Node *) * (size_t)capacity);
-					if (args == NULL) {
-						fprintf(stderr, "piko: out of memory\n");
-						exit(1);
+					args[arg_count++] = parse_expression(p);
+					if (!parser_match(p, TOK_COMMA)) {
+						break;
 					}
 				}
-
-				args[arg_count++] = parse_expression(p);
-				if (!parser_match(p, TOK_COMMA)) {
-					break;
-				}
 			}
-		}
 
-		parser_consume(p, TOK_RPAREN, "Expect ')' after arguments.");
-		expr = new_call(expr, args, arg_count, line);
-	}
+			parser_consume(p, TOK_RPAREN, "Expect ')' after arguments.");
+			expr = new_call(expr, args, arg_count, line);
+		} else if (parser_match(p, TOK_LBRACKET)) {
+			int idx_line = p->previous.line;
+			Node *index = parse_expression(p);
+			parser_consume(p, TOK_RBRACKET, "Expect ']' after index.");
 
-	/* indexing: postfix [index] */
-	for (;;) {
-		if (!parser_match(p, TOK_LBRACKET)) {
+			Node *n = node_new(NODE_INDEX, idx_line);
+			n->as.index.left = expr;
+			n->as.index.index = index;
+			expr = n;
+		} else {
 			break;
 		}
-
-		int idx_line = p->previous.line;
-		Node *index = parse_expression(p);
-		parser_consume(p, TOK_RBRACKET, "Expect ']' after index.");
-
-		Node *n = node_new(NODE_INDEX, idx_line);
-		n->as.index.left = expr;
-		n->as.index.index = index;
-		expr = n;
 	}
 
 	return expr;
@@ -503,8 +527,32 @@ static Node *parse_equality(Parser *p) {
 	return expr;
 }
 
-static Node *parse_assignment(Parser *p) {
+static Node *parse_logic_and(Parser *p) {
 	Node *expr = parse_equality(p);
+
+	while (parser_match(p, TOK_AND)) {
+		Token op = p->previous;
+		Node *right = parse_equality(p);
+		expr = new_logical(expr, op.type, right, op.line);
+	}
+
+	return expr;
+}
+
+static Node *parse_logic_or(Parser *p) {
+	Node *expr = parse_logic_and(p);
+
+	while (parser_match(p, TOK_OR)) {
+		Token op = p->previous;
+		Node *right = parse_logic_and(p);
+		expr = new_logical(expr, op.type, right, op.line);
+	}
+
+	return expr;
+}
+
+static Node *parse_assignment(Parser *p) {
+	Node *expr = parse_logic_or(p);
 	if (parser_match(p, TOK_EQ)) {
 		Token equals = p->previous;
 		if (expr->type != NODE_IDENT) {
@@ -538,13 +586,79 @@ static Node *parse_let_declaration(Parser *p) {
 	parser_consume(p, TOK_IDENT, "Expect variable name after 'let'.");
 	Token name = p->previous;
 
-	parser_consume(p, TOK_EQ, "Expect '=' after variable name.");
-	Node *init = parse_expression(p);
+	Node *init = NULL;
+	if (parser_match(p, TOK_EQ)) {
+		init = parse_expression(p);
+	} else {
+		init = node_new(NODE_NIL_LIT, name.line);
+	}
 	parser_consume(p, TOK_SEMICOLON, "Expect ';' after let declaration.");
 
 	Node *n = node_new(NODE_LET, name.line);
 	n->as.let_stmt.name = node_strdup(name.start, name.length);
 	n->as.let_stmt.init = init;
+	return n;
+}
+
+static Node *parse_if_statement(Parser *p) {
+	int line = p->previous.line;
+	Node *condition = parse_expression(p);
+	Node *then_branch = parse_statement(p);
+	Node *else_branch = NULL;
+	if (parser_match(p, TOK_ELSE)) {
+		else_branch = parse_statement(p);
+	}
+
+	Node *n = node_new(NODE_IF, line);
+	n->as.if_stmt.condition = condition;
+	n->as.if_stmt.then_branch = then_branch;
+	n->as.if_stmt.else_branch = else_branch;
+	return n;
+}
+
+static Node *parse_while_statement(Parser *p) {
+	int line = p->previous.line;
+	Node *condition = parse_expression(p);
+	Node *body = parse_statement(p);
+
+	Node *n = node_new(NODE_WHILE, line);
+	n->as.while_stmt.condition = condition;
+	n->as.while_stmt.body = body;
+	return n;
+}
+
+static Node *parse_for_statement(Parser *p) {
+	int line = p->previous.line;
+	parser_consume(p, TOK_LPAREN, "Expect '(' after 'for'.");
+
+	Node *init = NULL;
+	if (parser_match(p, TOK_SEMICOLON)) {
+		init = NULL;
+	} else if (parser_match(p, TOK_LET)) {
+		init = parse_let_declaration(p);
+	} else {
+		init = parse_expression_statement(p);
+	}
+
+	Node *condition = NULL;
+	if (!parser_check(p, TOK_SEMICOLON)) {
+		condition = parse_expression(p);
+	}
+	parser_consume(p, TOK_SEMICOLON, "Expect ';' after loop condition.");
+
+	Node *increment = NULL;
+	if (!parser_check(p, TOK_RPAREN)) {
+		increment = parse_expression(p);
+	}
+	parser_consume(p, TOK_RPAREN, "Expect ')' after for clauses.");
+
+	Node *body = parse_statement(p);
+
+	Node *n = node_new(NODE_FOR, line);
+	n->as.for_stmt.init = init;
+	n->as.for_stmt.condition = condition;
+	n->as.for_stmt.increment = increment;
+	n->as.for_stmt.body = body;
 	return n;
 }
 
@@ -581,6 +695,18 @@ static Node *parse_expression_statement(Parser *p) {
 }
 
 static Node *parse_statement(Parser *p) {
+	if (parser_match(p, TOK_IF)) {
+		return parse_if_statement(p);
+	}
+	if (parser_match(p, TOK_WHILE)) {
+		return parse_while_statement(p);
+	}
+	if (parser_match(p, TOK_FOR)) {
+		return parse_for_statement(p);
+	}
+	if (parser_match(p, TOK_LBRACE)) {
+		return parse_block_statement(p);
+	}
 	if (parser_match(p, TOK_PRINT)) {
 		return parse_print_statement(p);
 	}

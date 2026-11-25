@@ -55,6 +55,7 @@ void node_free(Node *node) {
 
 	switch (node->type) {
 		case NODE_PROGRAM:
+		case NODE_BLOCK:
 			for (int i = 0; i < node->as.program.count; i++) {
 				node_free(node->as.program.items[i]);
 			}
@@ -80,6 +81,21 @@ void node_free(Node *node) {
 			break;
 		case NODE_PRINT_STMT:
 			node_free(node->as.print_stmt.expr);
+			break;
+		case NODE_IF:
+			node_free(node->as.if_stmt.condition);
+			node_free(node->as.if_stmt.then_branch);
+			node_free(node->as.if_stmt.else_branch);
+			break;
+		case NODE_WHILE:
+			node_free(node->as.while_stmt.condition);
+			node_free(node->as.while_stmt.body);
+			break;
+		case NODE_FOR:
+			node_free(node->as.for_stmt.init);
+			node_free(node->as.for_stmt.condition);
+			node_free(node->as.for_stmt.increment);
+			node_free(node->as.for_stmt.body);
 			break;
 		case NODE_STRING_LIT:
 			free(node->as.string_val.chars);
@@ -119,6 +135,10 @@ void node_free(Node *node) {
 			node_free(node->as.binary.left);
 			node_free(node->as.binary.right);
 			break;
+		case NODE_LOGICAL:
+			node_free(node->as.logical.left);
+			node_free(node->as.logical.right);
+			break;
 		case NODE_GROUPING:
 			node_free(node->as.grouping.expr);
 			break;
@@ -139,11 +159,15 @@ void node_free(Node *node) {
 const char *node_type_name(NodeType type) {
 	switch (type) {
 		case NODE_PROGRAM: return "PROGRAM";
+		case NODE_BLOCK: return "BLOCK";
 		case NODE_EXPR_STMT: return "EXPR_STMT";
 		case NODE_LET: return "LET";
 		case NODE_PRINT_STMT: return "PRINT_STMT";
 		case NODE_FN_DECL: return "FN_DECL";
 		case NODE_RETURN: return "RETURN";
+		case NODE_IF: return "IF";
+		case NODE_WHILE: return "WHILE";
+		case NODE_FOR: return "FOR";
 		case NODE_INT_LIT: return "INT_LIT";
 		case NODE_FLOAT_LIT: return "FLOAT_LIT";
 		case NODE_BOOL_LIT: return "BOOL_LIT";
@@ -155,6 +179,7 @@ const char *node_type_name(NodeType type) {
 		case NODE_ARRAY: return "ARRAY";
 		case NODE_MAP: return "MAP";
 		case NODE_BINARY: return "BINARY";
+		case NODE_LOGICAL: return "LOGICAL";
 		case NODE_INDEX: return "INDEX";
 		case NODE_GROUPING: return "GROUPING";
 		case NODE_ASSIGN: return "ASSIGN";
@@ -178,6 +203,7 @@ void node_print(Node *node, int indent) {
 
 	switch (node->type) {
 		case NODE_PROGRAM:
+		case NODE_BLOCK:
 			printf(" count=%d\n", node->as.program.count);
 			for (int i = 0; i < node->as.program.count; i++) {
 				node_print(node->as.program.items[i], indent + 2);
@@ -210,6 +236,50 @@ void node_print(Node *node, int indent) {
 			if (node->as.return_stmt.value != NULL) {
 				node_print(node->as.return_stmt.value, indent + 2);
 			}
+			break;
+		case NODE_IF:
+			printf("\n");
+			print_indent(indent + 2);
+			printf("condition:\n");
+			node_print(node->as.if_stmt.condition, indent + 4);
+			print_indent(indent + 2);
+			printf("then:\n");
+			node_print(node->as.if_stmt.then_branch, indent + 4);
+			if (node->as.if_stmt.else_branch != NULL) {
+				print_indent(indent + 2);
+				printf("else:\n");
+				node_print(node->as.if_stmt.else_branch, indent + 4);
+			}
+			break;
+		case NODE_WHILE:
+			printf("\n");
+			print_indent(indent + 2);
+			printf("condition:\n");
+			node_print(node->as.while_stmt.condition, indent + 4);
+			print_indent(indent + 2);
+			printf("body:\n");
+			node_print(node->as.while_stmt.body, indent + 4);
+			break;
+		case NODE_FOR:
+			printf("\n");
+			if (node->as.for_stmt.init != NULL) {
+				print_indent(indent + 2);
+				printf("init:\n");
+				node_print(node->as.for_stmt.init, indent + 4);
+			}
+			if (node->as.for_stmt.condition != NULL) {
+				print_indent(indent + 2);
+				printf("condition:\n");
+				node_print(node->as.for_stmt.condition, indent + 4);
+			}
+			if (node->as.for_stmt.increment != NULL) {
+				print_indent(indent + 2);
+				printf("increment:\n");
+				node_print(node->as.for_stmt.increment, indent + 4);
+			}
+			print_indent(indent + 2);
+			printf("body:\n");
+			node_print(node->as.for_stmt.body, indent + 4);
 			break;
 		case NODE_INT_LIT:
 			printf(" value=%lld\n", (long long)node->as.int_val);
@@ -278,6 +348,11 @@ void node_print(Node *node, int indent) {
 			printf(" op=%s\n", token_op_name(node->as.binary.op));
 			node_print(node->as.binary.left, indent + 2);
 			node_print(node->as.binary.right, indent + 2);
+			break;
+		case NODE_LOGICAL:
+			printf(" op=%s\n", token_op_name(node->as.logical.op));
+			node_print(node->as.logical.left, indent + 2);
+			node_print(node->as.logical.right, indent + 2);
 			break;
 		case NODE_GROUPING:
 			printf("\n");

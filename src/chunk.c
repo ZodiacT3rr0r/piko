@@ -55,6 +55,13 @@ static int constant_instruction(const char *name, const Chunk *chunk, int offset
 	return offset + 2;
 }
 
+static int jump_instruction(const char *name, int sign, const Chunk *chunk, int offset) {
+	uint16_t jump = (uint16_t)(chunk->code[offset + 1] << 8);
+	jump |= chunk->code[offset + 2];
+	printf("%-16s %4d -> %d\n", name, offset, offset + 3 + sign * (int)jump);
+	return offset + 3;
+}
+
 void disassemble_chunk(const Chunk *chunk, const char *name) {
 	printf("== %s ==\n", name);
 	for (int offset = 0; offset < chunk->count;) {
@@ -114,9 +121,11 @@ int disassemble_instruction(const Chunk *chunk, int offset) {
 			uint8_t capture_count = chunk->code[offset + 2];
 			printf("%-16s %4d captures=%d\n", "OP_CLOSURE", constant, capture_count);
 			for (int i = 0; i < capture_count; i++) {
-				printf("      |            slot=%d\n", chunk->code[offset + 3 + i]);
+				uint8_t is_local = chunk->code[offset + 3 + i * 2];
+				uint8_t index = chunk->code[offset + 3 + i * 2 + 1];
+				printf("      |            %s %d\n", is_local ? "local" : "upvalue", index);
 			}
-			return offset + 3 + capture_count;
+			return offset + 3 + capture_count * 2;
 		}
 		case OP_GET_UPVALUE:
 			printf("%-16s %4d\n", "OP_GET_UPVALUE", chunk->code[offset + 1]);
@@ -124,6 +133,14 @@ int disassemble_instruction(const Chunk *chunk, int offset) {
 		case OP_SET_UPVALUE:
 			printf("%-16s %4d\n", "OP_SET_UPVALUE", chunk->code[offset + 1]);
 			return offset + 2;
+		case OP_CLOSE_UPVALUE:
+			return simple_instruction("OP_CLOSE_UPVALUE", offset);
+		case OP_JUMP:
+			return jump_instruction("OP_JUMP", 1, chunk, offset);
+		case OP_JUMP_IF_FALSE:
+			return jump_instruction("OP_JUMP_IF_FALSE", 1, chunk, offset);
+		case OP_LOOP:
+			return jump_instruction("OP_LOOP", -1, chunk, offset);
 		case OP_CALL:
 			printf("%-16s %4d\n", "OP_CALL", chunk->code[offset + 1]);
 			return offset + 2;

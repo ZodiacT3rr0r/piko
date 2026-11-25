@@ -3,6 +3,9 @@
 
 #include "chunk.h"
 
+#define FRAMES_MAX 64
+#define STACK_MAX  256
+
 typedef struct ObjClosure ObjClosure;
 typedef struct ObjUpvalue ObjUpvalue;
 
@@ -19,10 +22,10 @@ typedef struct {
 } CallFrame;
 
 typedef struct {
-	CallFrame frames[64];
+	CallFrame frames[FRAMES_MAX];
 	int frame_count;
 
-	Value stack[256];
+	Value stack[STACK_MAX];
 	Value *stack_top;
 	ObjUpvalue *open_upvalues;
 

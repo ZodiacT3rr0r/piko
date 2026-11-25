@@ -1,0 +1,17 @@
+fn level1(base) {
+    let shared = base;
+    fn level2(step) {
+        return fn(mult) {
+            shared = shared + step;
+            return shared * mult;
+        };
+    }
+    return level2;
+}
+
+let mk = level1(10);
+let c1 = mk(2);
+let c2 = mk(5);
+print(c1(3));
+print(c2(2));
+

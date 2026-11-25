@@ -6,11 +6,12 @@
 #include "value.h"
 
 static void runtime_error(VM *vm, const char *format, ...);
-static void push(VM *vm, Value value);
+static bool push(VM *vm, Value value);
 static Value pop(VM *vm);
 static Value peek(VM *vm, int distance);
 static CallFrame *current_frame(VM *vm);
 static uint8_t read_byte(VM *vm);
+static uint16_t read_short(VM *vm);
 static Value read_constant(VM *vm);
 static bool values_equal(Value a, Value b);
 static bool is_falsey(Value value);
@@ -104,9 +105,14 @@ static CallFrame *current_frame(VM *vm) {
 	return &vm->frames[vm->frame_count - 1];
 }
 
-static void push(VM *vm, Value value) {
+static bool push(VM *vm, Value value) {
+	if ((int)(vm->stack_top - vm->stack) >= STACK_MAX) {
+		runtime_error(vm, "Value stack overflow.");
+		return false;
+	}
 	*vm->stack_top = value;
 	vm->stack_top++;
+	return true;
 }
 
 static Value pop(VM *vm) {
@@ -121,6 +127,12 @@ static Value peek(VM *vm, int distance) {
 static uint8_t read_byte(VM *vm) {
 	CallFrame *frame = current_frame(vm);
 	return *frame->ip++;
+}
+
+static uint16_t read_short(VM *vm) {
+	CallFrame *frame = current_frame(vm);
+	frame->ip += 2;
+	return (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]);
 }
 
 static Value read_constant(VM *vm) {
@@ -240,20 +252,15 @@ static bool binary_number_op(VM *vm, char op) {
 
 	switch (op) {
 		case '+':
-			push(vm, NUMBER_VAL(left + right));
-			break;
+			return push(vm, NUMBER_VAL(left + right));
 		case '-':
-			push(vm, NUMBER_VAL(left - right));
-			break;
+			return push(vm, NUMBER_VAL(left - right));
 		case '*':
-			push(vm, NUMBER_VAL(left * right));
-			break;
+			return push(vm, NUMBER_VAL(left * right));
 		case '/':
-			push(vm, NUMBER_VAL(left / right));
-			break;
+			return push(vm, NUMBER_VAL(left / right));
 		case '%':
-			push(vm, NUMBER_VAL((double)((int64_t)left % (int64_t)right)));
-			break;
+			return push(vm, NUMBER_VAL((double)((int64_t)left % (int64_t)right)));
 	}
 
 	return true;
@@ -271,8 +278,7 @@ static bool call_native(VM *vm, ObjNative *native, int arg_count) {
 	}
 
 	vm->stack_top -= arg_count + 1;
-	push(vm, result);
-	return true;
+	return push(vm, result);
 }
 
 static bool call_closure(VM *vm, ObjClosure *closure, int arg_count) {
@@ -282,7 +288,7 @@ static bool call_closure(VM *vm, ObjClosure *closure, int arg_count) {
 		return false;
 	}
 
-	if (vm->frame_count >= (int)(sizeof(vm->frames) / sizeof(vm->frames[0]))) {
+	if (vm->frame_count >= FRAMES_MAX) {
 		runtime_error(vm, "Call stack overflow.");
 		return false;
 	}
@@ -307,23 +313,33 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 		uint8_t instruction = read_byte(vm);
 		switch (instruction) {
 			case OP_CONSTANT:
-				push(vm, read_constant(vm));
+				if (!push(vm, read_constant(vm))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			case OP_NIL:
-				push(vm, NIL_VAL);
+				if (!push(vm, NIL_VAL)) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			case OP_TRUE:
-				push(vm, BOOL_VAL(true));
+				if (!push(vm, BOOL_VAL(true))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			case OP_FALSE:
-				push(vm, BOOL_VAL(false));
+				if (!push(vm, BOOL_VAL(false))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			case OP_POP:
 				pop(vm);
 				break;
 			case OP_GET_LOCAL: {
 				uint8_t slot = read_byte(vm);
-				push(vm, current_frame(vm)->slots[slot]);
+				if (!push(vm, current_frame(vm)->slots[slot])) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			case OP_SET_LOCAL: {
@@ -339,7 +355,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 					runtime_error(vm, "Undefined variable '%s'.", name->chars);
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
-				push(vm, value);
+				if (!push(vm, value)) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			case OP_DEFINE_GLOBAL: {
@@ -361,7 +379,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 			case OP_EQUAL: {
 				Value right = pop(vm);
 				Value left = pop(vm);
-				push(vm, BOOL_VAL(values_equal(left, right)));
+				if (!push(vm, BOOL_VAL(values_equal(left, right)))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			case OP_GREATER: {
@@ -371,7 +391,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				}
 				double right = AS_NUMBER(pop(vm));
 				double left = AS_NUMBER(pop(vm));
-				push(vm, BOOL_VAL(left > right));
+				if (!push(vm, BOOL_VAL(left > right))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			case OP_LESS: {
@@ -381,7 +403,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				}
 				double right = AS_NUMBER(pop(vm));
 				double left = AS_NUMBER(pop(vm));
-				push(vm, BOOL_VAL(left < right));
+				if (!push(vm, BOOL_VAL(left < right))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			case OP_ADD:
@@ -410,14 +434,18 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				}
 				break;
 			case OP_NOT:
-				push(vm, BOOL_VAL(is_falsey(pop(vm))));
+				if (!push(vm, BOOL_VAL(is_falsey(pop(vm))))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			case OP_NEGATE:
 				if (!IS_NUMBER(peek(vm, 0))) {
 					runtime_error(vm, "Operand must be a number.");
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
-				push(vm, NUMBER_VAL(-AS_NUMBER(pop(vm))));
+				if (!push(vm, NUMBER_VAL(-AS_NUMBER(pop(vm))))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			case OP_CLOSURE: {
 				Value function_val = read_constant(vm);
@@ -431,11 +459,21 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				ObjClosure *closure = obj_closure_new(function, (int)capture_count);
 				CallFrame *frame = current_frame(vm);
 				for (int i = 0; i < (int)capture_count; i++) {
-					uint8_t slot = read_byte(vm);
-					ObjUpvalue *up = capture_upvalue(vm, &frame->slots[slot]);
-					closure->captures[i] = up;
+					uint8_t is_local = read_byte(vm);
+					uint8_t index = read_byte(vm);
+					if (is_local) {
+						closure->captures[i] = capture_upvalue(vm, &frame->slots[index]);
+					} else {
+						if (frame->closure == NULL || index >= (uint8_t)frame->closure->capture_count) {
+							runtime_error(vm, "Invalid outer upvalue capture.");
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
+						closure->captures[i] = frame->closure->captures[index];
+					}
 				}
-				push(vm, OBJ_VAL(closure));
+				if (!push(vm, OBJ_VAL(closure))) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			case OP_GET_UPVALUE: {
@@ -446,7 +484,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 					return VM_INTERPRET_RUNTIME_ERROR;
 				}
 				ObjUpvalue *up = frame->closure->captures[index];
-				push(vm, *up->location);
+				if (!push(vm, *up->location)) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			case OP_SET_UPVALUE: {
@@ -458,6 +498,28 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 				}
 				ObjUpvalue *up = frame->closure->captures[index];
 				*up->location = peek(vm, 0);
+				break;
+			}
+			case OP_CLOSE_UPVALUE: {
+				close_upvalues(vm, vm->stack_top - 1);
+				pop(vm);
+				break;
+			}
+			case OP_JUMP: {
+				uint16_t offset = read_short(vm);
+				current_frame(vm)->ip += offset;
+				break;
+			}
+			case OP_JUMP_IF_FALSE: {
+				uint16_t offset = read_short(vm);
+				if (is_falsey(peek(vm, 0))) {
+					current_frame(vm)->ip += offset;
+				}
+				break;
+			}
+			case OP_LOOP: {
+				uint16_t offset = read_short(vm);
+				current_frame(vm)->ip -= offset;
 				break;
 			}
 			case OP_CALL: {
@@ -504,7 +566,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 							runtime_error(vm, "Index out of bounds.");
 							return VM_INTERPRET_RUNTIME_ERROR;
 						}
-						push(vm, a->items[idx]);
+						if (!push(vm, a->items[idx])) {
+							return VM_INTERPRET_RUNTIME_ERROR;
+						}
 						break;
 					}
 					case OBJ_MAP: {
@@ -516,9 +580,13 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 						ObjString *key = (ObjString *)AS_OBJ(index);
 						Value value;
 						if (!obj_map_get(map, key->chars, key->length, &value)) {
-							push(vm, NIL_VAL);
+							if (!push(vm, NIL_VAL)) {
+								return VM_INTERPRET_RUNTIME_ERROR;
+							}
 						} else {
-							push(vm, value);
+							if (!push(vm, value)) {
+								return VM_INTERPRET_RUNTIME_ERROR;
+							}
 						}
 						break;
 					}
@@ -548,7 +616,9 @@ InterpretResult vm_interpret(VM *vm, const Chunk *chunk) {
 
 				vm->frame_count--;
 				vm->stack_top = frame->slots;
-				push(vm, result);
+				if (!push(vm, result)) {
+					return VM_INTERPRET_RUNTIME_ERROR;
+				}
 				break;
 			}
 			default:

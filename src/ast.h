@@ -6,11 +6,15 @@
 
 typedef enum {
 	NODE_PROGRAM,
+	NODE_BLOCK,
 	NODE_EXPR_STMT,
 	NODE_LET,
 	NODE_PRINT_STMT,
 	NODE_FN_DECL,
 	NODE_RETURN,
+	NODE_IF,
+	NODE_WHILE,
+	NODE_FOR,
 
 	NODE_INT_LIT,
 	NODE_FLOAT_LIT,
@@ -23,6 +27,7 @@ typedef enum {
 	NODE_ARRAY,
 	NODE_MAP,
 	NODE_BINARY,
+	NODE_LOGICAL,
 	NODE_INDEX,
 	NODE_GROUPING,
 	NODE_ASSIGN,
@@ -63,6 +68,24 @@ struct Node {
 		struct {
 			Node *expr;
 		} print_stmt;
+
+		struct {
+			Node *condition;
+			Node *then_branch;
+			Node *else_branch;
+		} if_stmt;
+
+		struct {
+			Node *condition;
+			Node *body;
+		} while_stmt;
+
+		struct {
+			Node *init;
+			Node *condition;
+			Node *increment;
+			Node *body;
+		} for_stmt;
 
 		int64_t int_val;
 		double float_val;
@@ -110,6 +133,12 @@ struct Node {
 			Node *left;
 			Node *right;
 		} binary;
+
+		struct {
+			TokenType op;
+			Node *left;
+			Node *right;
+		} logical;
 
 		struct {
 			Node *expr;

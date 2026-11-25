@@ -5,12 +5,15 @@
 typedef struct {
 	const char *name;
 	int length;
+	int depth;
+	bool is_captured;
 } Local;
 
 typedef struct {
 	const char *name;
 	int length;
-	int outer_slot;
+	uint8_t index;
+	bool is_local;
 } Upvalue;
 
 typedef struct Compiler {
@@ -18,6 +21,7 @@ typedef struct Compiler {
 	struct Compiler *enclosing;
 	bool had_error;
 	bool in_function;
+	int scope_depth;
 	Local *locals;
 	int local_count;
 	int local_capacity;
@@ -32,6 +36,11 @@ static void compile_call(Compiler *c, Node *node);
 static void compile_function_decl(Compiler *c, Node *node);
 static void compile_return(Compiler *c, Node *node);
 static void compile_assign(Compiler *c, Node *node);
+static void compile_if(Compiler *c, Node *node);
+static void compile_while(Compiler *c, Node *node);
+static void compile_for(Compiler *c, Node *node);
+static void compile_block(Compiler *c, Node *node);
+static void compile_logical(Compiler *c, Node *node);
 
 static void compile_error(Compiler *c, int line, const char *message) {
 	fprintf(stderr, "[line %d] Compile error: %s\n", line, message);
@@ -45,6 +54,34 @@ static void emit_byte(Compiler *c, uint8_t byte, int line) {
 static void emit_bytes(Compiler *c, uint8_t first, uint8_t second, int line) {
 	emit_byte(c, first, line);
 	emit_byte(c, second, line);
+}
+
+static int emit_jump(Compiler *c, OpCode instruction, int line) {
+	emit_byte(c, (uint8_t)instruction, line);
+	emit_byte(c, 0xff, line);
+	emit_byte(c, 0xff, line);
+	return c->chunk->count - 2;
+}
+
+static void patch_jump(Compiler *c, int offset, int line) {
+	int jump = c->chunk->count - offset - 2;
+	if (jump > UINT16_MAX) {
+		compile_error(c, line, "Too much code to jump over.");
+		return;
+	}
+	c->chunk->code[offset] = (uint8_t)((jump >> 8) & 0xff);
+	c->chunk->code[offset + 1] = (uint8_t)(jump & 0xff);
+}
+
+static void emit_loop(Compiler *c, int loop_start, int line) {
+	emit_byte(c, OP_LOOP, line);
+	int offset = c->chunk->count - loop_start + 2;
+	if (offset > UINT16_MAX) {
+		compile_error(c, line, "Loop body too large.");
+		return;
+	}
+	emit_byte(c, (uint8_t)((offset >> 8) & 0xff), line);
+	emit_byte(c, (uint8_t)(offset & 0xff), line);
 }
 
 static int make_constant(Compiler *c, Value value, int line) {
@@ -68,30 +105,6 @@ static void emit_global(Compiler *c, OpCode op, const char *name, int line) {
 	emit_bytes(c, (uint8_t)op, (uint8_t)constant, line);
 }
 
-static void compiler_init(Compiler *c, Chunk *chunk, bool in_function, Compiler *enclosing) {
-	c->chunk = chunk;
-	c->enclosing = enclosing;
-	c->had_error = false;
-	c->in_function = in_function;
-	c->locals = NULL;
-	c->local_capacity = 0;
-	c->upvalues = NULL;
-	c->upvalue_capacity = 0;
-	c->upvalue_count = 0;
-	c->local_count = in_function ? 1 : 0;
-}
-
-static void compiler_free(Compiler *c) {
-	free(c->locals);
-	free(c->upvalues);
-	c->locals = NULL;
-	c->upvalues = NULL;
-	c->local_capacity = 0;
-	c->upvalue_capacity = 0;
-	c->local_count = 0;
-	c->upvalue_count = 0;
-}
-
 static void ensure_local_capacity(Compiler *c) {
 	if (c->local_count + 1 <= c->local_capacity) {
 		return;
@@ -106,6 +119,57 @@ static void ensure_local_capacity(Compiler *c) {
 
 	c->locals = memory;
 	c->local_capacity = new_capacity;
+}
+
+static void compiler_init(Compiler *c, Chunk *chunk, bool in_function, Compiler *enclosing) {
+	c->chunk = chunk;
+	c->enclosing = enclosing;
+	c->had_error = false;
+	c->in_function = in_function;
+	c->scope_depth = in_function ? 1 : 0;
+	c->locals = NULL;
+	c->local_capacity = 0;
+	c->upvalues = NULL;
+	c->upvalue_capacity = 0;
+	c->upvalue_count = 0;
+	c->local_count = 0;
+
+	if (in_function) {
+		ensure_local_capacity(c);
+		c->locals[0].name = "";
+		c->locals[0].length = 0;
+		c->locals[0].depth = 1;
+		c->locals[0].is_captured = false;
+		c->local_count = 1;
+	}
+}
+
+static void compiler_free(Compiler *c) {
+	free(c->locals);
+	free(c->upvalues);
+	c->locals = NULL;
+	c->upvalues = NULL;
+	c->local_capacity = 0;
+	c->upvalue_capacity = 0;
+	c->local_count = 0;
+	c->upvalue_count = 0;
+}
+
+static void begin_scope(Compiler *c) {
+	c->scope_depth++;
+}
+
+static void end_scope(Compiler *c, int line) {
+	c->scope_depth--;
+	int min_slot = c->in_function ? 1 : 0;
+	while (c->local_count > min_slot && c->locals[c->local_count - 1].depth > c->scope_depth) {
+		if (c->locals[c->local_count - 1].is_captured) {
+			emit_byte(c, OP_CLOSE_UPVALUE, line);
+		} else {
+			emit_byte(c, OP_POP, line);
+		}
+		c->local_count--;
+	}
 }
 
 static void ensure_upvalue_capacity(Compiler *c) {
@@ -128,6 +192,8 @@ static void declare_local(Compiler *c, const char *name, int length) {
 	ensure_local_capacity(c);
 	c->locals[c->local_count].name = name;
 	c->locals[c->local_count].length = length;
+	c->locals[c->local_count].depth = c->scope_depth;
+	c->locals[c->local_count].is_captured = false;
 	c->local_count++;
 }
 
@@ -141,11 +207,9 @@ static int resolve_local(Compiler *c, const char *name, int length) {
 	return -1;
 }
 
-static int add_upvalue(Compiler *c, const char *name, int length, int outer_slot) {
+static int add_upvalue(Compiler *c, const char *name, int length, uint8_t index, bool is_local) {
 	for (int i = 0; i < c->upvalue_count; i++) {
-		if (c->upvalues[i].length == length &&
-			memcmp(c->upvalues[i].name, name, (size_t)length) == 0 &&
-			c->upvalues[i].outer_slot == outer_slot) {
+		if (c->upvalues[i].index == index && c->upvalues[i].is_local == is_local) {
 			return i;
 		}
 	}
@@ -157,19 +221,29 @@ static int add_upvalue(Compiler *c, const char *name, int length, int outer_slot
 	ensure_upvalue_capacity(c);
 	c->upvalues[c->upvalue_count].name = name;
 	c->upvalues[c->upvalue_count].length = length;
-	c->upvalues[c->upvalue_count].outer_slot = outer_slot;
+	c->upvalues[c->upvalue_count].index = index;
+	c->upvalues[c->upvalue_count].is_local = is_local;
 	c->upvalue_count++;
 	return c->upvalue_count - 1;
 }
 
+/* Recursively resolves upvalues across arbitrary lexical nesting depths.
+ * If found as a direct local in c->enclosing, marks is_local = true.
+ * Otherwise recurses into c->enclosing to thread an upvalue chain (is_local = false). */
 static int resolve_upvalue(Compiler *c, const char *name, int length) {
 	if (c->enclosing == NULL) {
 		return -1;
 	}
 
-	int outer_slot = resolve_local(c->enclosing, name, length);
-	if (outer_slot >= 0) {
-		return add_upvalue(c, name, length, outer_slot);
+	int local = resolve_local(c->enclosing, name, length);
+	if (local >= 0) {
+		c->enclosing->locals[local].is_captured = true;
+		return add_upvalue(c, name, length, (uint8_t)local, true);
+	}
+
+	int upvalue = resolve_upvalue(c->enclosing, name, length);
+	if (upvalue >= 0) {
+		return add_upvalue(c, name, length, (uint8_t)upvalue, false);
 	}
 
 	return -1;
@@ -226,6 +300,30 @@ static void compile_binary(Compiler *c, Node *node) {
 	}
 }
 
+static void compile_logical(Compiler *c, Node *node) {
+	if (node->as.logical.op == TOK_AND) {
+		compile_expression(c, node->as.logical.left);
+		int end_jump = emit_jump(c, OP_JUMP_IF_FALSE, node->line);
+		emit_byte(c, OP_POP, node->line);
+		compile_expression(c, node->as.logical.right);
+		patch_jump(c, end_jump, node->line);
+		return;
+	}
+
+	if (node->as.logical.op == TOK_OR) {
+		compile_expression(c, node->as.logical.left);
+		int else_jump = emit_jump(c, OP_JUMP_IF_FALSE, node->line);
+		int end_jump = emit_jump(c, OP_JUMP, node->line);
+		patch_jump(c, else_jump, node->line);
+		emit_byte(c, OP_POP, node->line);
+		compile_expression(c, node->as.logical.right);
+		patch_jump(c, end_jump, node->line);
+		return;
+	}
+
+	compile_error(c, node->line, "Unsupported logical operator.");
+}
+
 static void compile_unary(Compiler *c, Node *node) {
 	compile_expression(c, node->as.unary.right);
 
@@ -268,11 +366,12 @@ static void emit_closure(Compiler *c, ObjFunction *function, Compiler *inner, in
 	emit_byte(c, (uint8_t)constant, line);
 	emit_byte(c, (uint8_t)inner->upvalue_count, line);
 	for (int i = 0; i < inner->upvalue_count; i++) {
-		emit_byte(c, (uint8_t)inner->upvalues[i].outer_slot, line);
+		emit_byte(c, inner->upvalues[i].is_local ? 1 : 0, line);
+		emit_byte(c, inner->upvalues[i].index, line);
 	}
 }
 
-static void compile_function_decl(Compiler *c, Node *node) {
+static void compile_function_decl_impl(Compiler *c, Node *node, bool as_statement) {
 	ObjFunction *function = obj_function_new(node->as.fn_decl.name, node->as.fn_decl.param_count);
 	Compiler inner;
 	compiler_init(&inner, &function->chunk, true, c);
@@ -290,13 +389,19 @@ static void compile_function_decl(Compiler *c, Node *node) {
 	}
 
 	emit_closure(c, function, &inner, node->line);
-	if (c->in_function) {
-		declare_local(c, node->as.fn_decl.name, (int)strlen(node->as.fn_decl.name));
-	} else {
-		emit_global(c, OP_DEFINE_GLOBAL, node->as.fn_decl.name, node->line);
+	if (as_statement && strlen(node->as.fn_decl.name) > 0) {
+		if (c->scope_depth > 0) {
+			declare_local(c, node->as.fn_decl.name, (int)strlen(node->as.fn_decl.name));
+		} else {
+			emit_global(c, OP_DEFINE_GLOBAL, node->as.fn_decl.name, node->line);
+		}
 	}
 
 	compiler_free(&inner);
+}
+
+static void compile_function_decl(Compiler *c, Node *node) {
+	compile_function_decl_impl(c, node, true);
 }
 
 static void compile_return(Compiler *c, Node *node) {
@@ -315,20 +420,93 @@ static void compile_return(Compiler *c, Node *node) {
 
 static void compile_assign(Compiler *c, Node *node) {
 	compile_expression(c, node->as.assign.value);
-	
+
 	int local = resolve_local(c, node->as.assign.name, node->as.assign.length);
 	if (local >= 0) {
 		emit_local(c, OP_SET_LOCAL, local, node->line);
 		return;
 	}
-	
+
 	int upvalue = resolve_upvalue(c, node->as.assign.name, node->as.assign.length);
 	if (upvalue >= 0) {
 		emit_local(c, OP_SET_UPVALUE, upvalue, node->line);
 		return;
 	}
-	
+
 	emit_global(c, OP_SET_GLOBAL, node->as.assign.name, node->line);
+}
+
+static void compile_if(Compiler *c, Node *node) {
+	compile_expression(c, node->as.if_stmt.condition);
+
+	int then_jump = emit_jump(c, OP_JUMP_IF_FALSE, node->line);
+	emit_byte(c, OP_POP, node->line);
+	compile_statement(c, node->as.if_stmt.then_branch);
+
+	int else_jump = emit_jump(c, OP_JUMP, node->line);
+	patch_jump(c, then_jump, node->line);
+	emit_byte(c, OP_POP, node->line);
+
+	if (node->as.if_stmt.else_branch != NULL) {
+		compile_statement(c, node->as.if_stmt.else_branch);
+	}
+	patch_jump(c, else_jump, node->line);
+}
+
+static void compile_while(Compiler *c, Node *node) {
+	int loop_start = c->chunk->count;
+	compile_expression(c, node->as.while_stmt.condition);
+
+	int exit_jump = emit_jump(c, OP_JUMP_IF_FALSE, node->line);
+	emit_byte(c, OP_POP, node->line);
+	compile_statement(c, node->as.while_stmt.body);
+	emit_loop(c, loop_start, node->line);
+
+	patch_jump(c, exit_jump, node->line);
+	emit_byte(c, OP_POP, node->line);
+}
+
+static void compile_for(Compiler *c, Node *node) {
+	begin_scope(c);
+
+	if (node->as.for_stmt.init != NULL) {
+		compile_statement(c, node->as.for_stmt.init);
+	}
+
+	int loop_start = c->chunk->count;
+	int exit_jump = -1;
+	if (node->as.for_stmt.condition != NULL) {
+		compile_expression(c, node->as.for_stmt.condition);
+		exit_jump = emit_jump(c, OP_JUMP_IF_FALSE, node->line);
+		emit_byte(c, OP_POP, node->line);
+	}
+
+	compile_statement(c, node->as.for_stmt.body);
+
+	if (node->as.for_stmt.increment != NULL) {
+		compile_expression(c, node->as.for_stmt.increment);
+		emit_byte(c, OP_POP, node->line);
+	}
+
+	emit_loop(c, loop_start, node->line);
+
+	if (exit_jump != -1) {
+		patch_jump(c, exit_jump, node->line);
+		emit_byte(c, OP_POP, node->line);
+	}
+
+	end_scope(c, node->line);
+}
+
+static void compile_block(Compiler *c, Node *node) {
+	begin_scope(c);
+	for (int i = 0; i < node->as.program.count; i++) {
+		compile_statement(c, node->as.program.items[i]);
+		if (c->had_error) {
+			break;
+		}
+	}
+	end_scope(c, node->line);
 }
 
 static void compile_array(Compiler *c, Node *node) {
@@ -485,11 +663,14 @@ static void compile_expression(Compiler *c, Node *node) {
 		case NODE_BINARY:
 			compile_binary(c, node);
 			break;
+		case NODE_LOGICAL:
+			compile_logical(c, node);
+			break;
 		case NODE_ASSIGN:
 			compile_assign(c, node);
 			break;
 		case NODE_FN_DECL:
-			compile_function_decl(c, node);
+			compile_function_decl_impl(c, node, false);
 			break;
 		default:
 			compile_error(c, node->line, "Unsupported expression node.");
@@ -514,7 +695,7 @@ static void compile_statement(Compiler *c, Node *node) {
 			break;
 		case NODE_LET:
 			compile_expression(c, node->as.let_stmt.init);
-			if (c->in_function) {
+			if (c->scope_depth > 0) {
 				declare_local(c, node->as.let_stmt.name, (int)strlen(node->as.let_stmt.name));
 			} else {
 				emit_global(c, OP_DEFINE_GLOBAL, node->as.let_stmt.name, node->line);
@@ -528,6 +709,19 @@ static void compile_statement(Compiler *c, Node *node) {
 			break;
 		case NODE_ASSIGN:
 			compile_assign(c, node);
+			emit_byte(c, OP_POP, node->line);
+			break;
+		case NODE_IF:
+			compile_if(c, node);
+			break;
+		case NODE_WHILE:
+			compile_while(c, node);
+			break;
+		case NODE_FOR:
+			compile_for(c, node);
+			break;
+		case NODE_BLOCK:
+			compile_block(c, node);
 			break;
 		default:
 			compile_error(c, node->line, "Unsupported statement node.");
